@@ -92,6 +92,35 @@ mise run check       # All of the above
 mise run run         # Launch the browser
 ```
 
+## Git Rules
+
+These rules have NO exceptions:
+
+- **Never bypass pre-commit hooks** (`--no-verify` is forbidden)
+- **Never force push** (`--force`, `--force-with-lease` are forbidden)
+- **Only amend commits that have not been pushed** — once pushed, create a new commit instead
+
+## Commit Messages
+
+Use short conventional commits referencing the GitHub issue:
+
+```
+feat(ie-dom): add tree traversal iterators #4
+fix(ie-net): handle redirect loop edge case #5
+test(ie-shell): CLI parsing unit tests #6
+refactor(ie-css): split style.rs into modules #22
+chore: update dependencies
+```
+
+Format: `type(scope): short description #issue`
+
+Types: `feat`, `fix`, `test`, `refactor`, `chore`, `docs`
+
+## Code Style
+
+- Keep comments short — one line when possible, no prose
+- No comments for self-evident code
+
 ## Key Design Decisions
 
 - **Latest standards only**: no quirks mode, no legacy HTML elements, no vendor-prefixed CSS
