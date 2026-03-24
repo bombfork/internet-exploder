@@ -1,0 +1,12 @@
+[package]
+name = "ie-dom"
+version = "0.1.0"
+description = "DOM tree representation for Internet Exploder"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,20 @@
+[package]
+name = "ie-net"
+version = "0.1.0"
+description = "Networking stack for Internet Exploder — HTTP/1.1, HTTP/2, TLS"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+hyper-rustls.workspace = true
+rustls.workspace = true
+url.workspace = true

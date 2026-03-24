@@ -1,0 +1,14 @@
+[package]
+name = "ie-css"
+version = "0.1.0"
+description = "CSS parser and style engine for Internet Exploder"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+ie-dom.workspace = true

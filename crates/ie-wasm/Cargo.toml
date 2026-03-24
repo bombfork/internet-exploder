@@ -1,0 +1,14 @@
+[package]
+name = "ie-wasm"
+version = "0.1.0"
+description = "WebAssembly execution engine for Internet Exploder via wasmtime"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+wasmtime.workspace = true

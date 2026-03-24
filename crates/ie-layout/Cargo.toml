@@ -1,0 +1,15 @@
+[package]
+name = "ie-layout"
+version = "0.1.0"
+description = "Layout engine for Internet Exploder — block, inline, flex, grid"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+ie-dom.workspace = true
+ie-css.workspace = true

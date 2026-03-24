@@ -1,0 +1,15 @@
+[package]
+name = "ie-js"
+version = "0.1.0"
+description = "JavaScript engine integration (Boa) for Internet Exploder"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+boa_engine.workspace = true
+ie-dom.workspace = true

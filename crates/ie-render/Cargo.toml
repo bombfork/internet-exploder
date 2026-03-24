@@ -1,0 +1,15 @@
+[package]
+name = "ie-render"
+version = "0.1.0"
+description = "GPU-accelerated renderer for Internet Exploder using wgpu"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+wgpu.workspace = true
+ie-layout.workspace = true

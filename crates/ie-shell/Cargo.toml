@@ -1,0 +1,25 @@
+[package]
+name = "ie-shell"
+version = "0.1.0"
+description = "Browser shell — window management, tabs, address bar, bookmarks UI"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tokio.workspace = true
+winit.workspace = true
+url.workspace = true
+ie-net.workspace = true
+ie-html.workspace = true
+ie-css.workspace = true
+ie-dom.workspace = true
+ie-js.workspace = true
+ie-layout.workspace = true
+ie-render.workspace = true
+ie-sandbox.workspace = true
