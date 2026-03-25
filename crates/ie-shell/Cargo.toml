@@ -17,6 +17,17 @@ winit.workspace = true
 url.workspace = true
 clap.workspace = true
 softbuffer.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
 ie-net.workspace = true
 ie-dom.workspace = true
 ie-sandbox.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+bytes.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true

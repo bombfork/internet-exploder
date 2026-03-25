@@ -12,8 +12,14 @@
 //! - No spell checking
 
 mod app;
+#[allow(dead_code)]
+mod bookmarks;
 mod cli;
 mod headless;
+#[allow(dead_code)]
+mod navigation;
+#[allow(dead_code)]
+mod tab;
 
 use anyhow::Result;
 use clap::Parser;
