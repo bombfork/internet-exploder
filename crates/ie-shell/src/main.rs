@@ -11,65 +11,36 @@
 //! - No address bar completion
 //! - No spell checking
 
+mod app;
+mod cli;
+mod headless;
+
 use anyhow::Result;
+use clap::Parser;
 use tracing_subscriber::EnvFilter;
-use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::window::{Window, WindowId};
+use winit::event_loop::EventLoop;
 
-struct Browser {
-    window: Option<Window>,
-}
-
-impl Browser {
-    fn new() -> Self {
-        Self { window: None }
-    }
-}
-
-impl ApplicationHandler for Browser {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_none() {
-            let attrs = Window::default_attributes()
-                .with_title("Internet Exploder")
-                .with_maximized(true);
-            match event_loop.create_window(attrs) {
-                Ok(window) => self.window = Some(window),
-                Err(e) => {
-                    tracing::error!("failed to create window: {e}");
-                    event_loop.exit();
-                }
-            }
-        }
-    }
-
-    fn window_event(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
-        event: WindowEvent,
-    ) {
-        match event {
-            WindowEvent::CloseRequested => {
-                event_loop.exit();
-            }
-            WindowEvent::RedrawRequested => {
-                // TODO: render current page
-            }
-            _ => {}
-        }
-    }
-}
+use cli::{Cli, Mode};
 
 fn main() -> Result<()> {
+    let cli = Cli::parse();
+    init_tracing();
+
+    match cli.mode()? {
+        Mode::Gui { url } => run_gui(url),
+        Mode::Headless { url, action } => headless::run_headless(url, action, cli.allow_http),
+    }
+}
+
+fn init_tracing() {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();
+}
 
+fn run_gui(url: Option<url::Url>) -> Result<()> {
     let event_loop = EventLoop::new()?;
-    let mut browser = Browser::new();
+    let mut browser = app::Browser::new(url);
     event_loop.run_app(&mut browser)?;
-
     Ok(())
 }
