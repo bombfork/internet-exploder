@@ -7,6 +7,7 @@ use anyhow::Result;
 use boa_engine::Context;
 
 pub struct JsRuntime {
+    #[expect(dead_code)]
     context: Context,
 }
 

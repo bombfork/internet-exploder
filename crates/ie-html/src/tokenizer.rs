@@ -1,7 +1,9 @@
 use anyhow::Result;
 
 pub struct Tokenizer<'a> {
+    #[expect(dead_code)]
     input: &'a str,
+    #[expect(dead_code)]
     pos: usize,
 }
 
