@@ -115,12 +115,14 @@ fn dump_source_error() {
 // --- Interactive headless tests ---
 
 fn interactive_session(commands: &[&str], allow_http: bool) -> Vec<serde_json::Value> {
+    let data_dir = tempfile::tempdir().unwrap();
+    let data_dir_str = data_dir.path().to_string_lossy().to_string();
+    let mut args = vec!["--headless", "--data-dir", &data_dir_str];
+    if allow_http {
+        args.push("--allow-http");
+    }
     let mut child = Command::new(binary_path())
-        .args(if allow_http {
-            vec!["--headless", "--allow-http"]
-        } else {
-            vec!["--headless"]
-        })
+        .args(&args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
