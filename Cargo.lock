@@ -1890,6 +1890,7 @@ name = "ie-sandbox"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

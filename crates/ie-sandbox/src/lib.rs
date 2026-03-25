@@ -11,7 +11,12 @@
 //! IPC between processes uses length-prefixed JSON messages over Unix domain sockets
 //! (or named pipes on Windows).
 
-pub mod ipc;
+pub mod channel;
+pub mod error;
+pub mod message;
 pub mod process;
 
+pub use channel::IpcChannel;
+pub use error::IpcError;
+pub use message::IpcMessage;
 pub use process::{ProcessKind, spawn_child};
