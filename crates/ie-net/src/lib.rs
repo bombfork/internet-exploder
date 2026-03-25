@@ -5,5 +5,9 @@
 //! No background prefetch — every request is explicitly initiated.
 
 pub mod client;
+pub mod error;
+pub mod response;
 
 pub use client::Client;
+pub use error::NetError;
+pub use response::Response;

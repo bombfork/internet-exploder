@@ -18,3 +18,4 @@ http-body-util.workspace = true
 hyper-rustls.workspace = true
 rustls.workspace = true
 url.workspace = true
+bytes.workspace = true
