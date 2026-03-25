@@ -27,6 +27,10 @@ pub struct Cli {
     /// Allow plain HTTP navigation (default: HTTPS-only)
     #[arg(long)]
     pub allow_http: bool,
+
+    /// Override data directory (bookmarks, etc.)
+    #[arg(long)]
+    pub data_dir: Option<String>,
 }
 
 #[derive(Debug, PartialEq)]

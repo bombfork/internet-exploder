@@ -33,7 +33,9 @@ fn main() -> Result<()> {
 
     match cli.mode()? {
         Mode::Gui { url } => run_gui(url, cli.allow_http),
-        Mode::Headless { url, action } => headless::run_headless(url, action, cli.allow_http),
+        Mode::Headless { url, action } => {
+            headless::run_headless(url, action, cli.allow_http, cli.data_dir)
+        }
     }
 }
 
