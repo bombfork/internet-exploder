@@ -6,6 +6,7 @@ pub struct NavigationResult {
     pub status: u16,
     pub final_url: Url,
     pub body: Vec<u8>,
+    #[allow(dead_code)]
     pub content_type: Option<String>,
 }
 
@@ -14,6 +15,7 @@ pub enum NavigationError {
     #[error("network error: {0}")]
     Net(#[from] ie_net::NetError),
 
+    #[allow(dead_code)]
     #[error("invalid URL: {0}")]
     InvalidUrl(String),
 

@@ -8,7 +8,7 @@ pub enum TabState {
     Blank,
     Loading,
     Loaded,
-    Error(String),
+    Error(#[allow(dead_code)] String),
 }
 
 #[derive(Debug, Clone)]
@@ -111,6 +111,10 @@ impl TabManager {
         &self.tabs
     }
 
+    pub fn tabs_mut(&mut self) -> &mut Vec<Tab> {
+        &mut self.tabs
+    }
+
     pub fn next_tab(&mut self) {
         if !self.tabs.is_empty() {
             self.active = (self.active + 1) % self.tabs.len();
@@ -127,6 +131,7 @@ impl TabManager {
         }
     }
 
+    #[allow(dead_code)]
     pub fn switch_to(&mut self, id: TabId) -> bool {
         if let Some(pos) = self.tabs.iter().position(|t| t.id == id) {
             self.active = pos;
@@ -164,10 +169,12 @@ impl TabManager {
         true
     }
 
+    #[allow(dead_code)]
     pub fn can_go_back(&self) -> bool {
         self.active_tab().is_some_and(|t| t.history_index > 0)
     }
 
+    #[allow(dead_code)]
     pub fn can_go_forward(&self) -> bool {
         self.active_tab()
             .is_some_and(|t| !t.history.is_empty() && t.history_index < t.history.len() - 1)

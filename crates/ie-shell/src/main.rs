@@ -12,13 +12,12 @@
 //! - No spell checking
 
 mod app;
-#[allow(dead_code)]
 mod bookmarks;
 mod cli;
 mod headless;
-#[allow(dead_code)]
+mod keybindings;
 mod navigation;
-#[allow(dead_code)]
+mod overlay;
 mod tab;
 
 use anyhow::Result;
@@ -33,7 +32,7 @@ fn main() -> Result<()> {
     init_tracing();
 
     match cli.mode()? {
-        Mode::Gui { url } => run_gui(url),
+        Mode::Gui { url } => run_gui(url, cli.allow_http),
         Mode::Headless { url, action } => headless::run_headless(url, action, cli.allow_http),
     }
 }
@@ -44,9 +43,10 @@ fn init_tracing() {
         .init();
 }
 
-fn run_gui(url: Option<url::Url>) -> Result<()> {
-    let event_loop = EventLoop::new()?;
-    let mut browser = app::Browser::new(url);
+fn run_gui(url: Option<url::Url>, allow_http: bool) -> Result<()> {
+    let event_loop = EventLoop::<app::UserEvent>::with_user_event().build()?;
+    let proxy = event_loop.create_proxy();
+    let mut browser = app::Browser::new(url, allow_http, proxy);
     event_loop.run_app(&mut browser)?;
     Ok(())
 }

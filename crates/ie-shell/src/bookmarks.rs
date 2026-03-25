@@ -37,11 +37,13 @@ impl BookmarkStore {
         self.save()
     }
 
+    #[allow(dead_code)]
     pub fn remove(&mut self, url: &str) -> Result<()> {
         self.bookmarks.retain(|b| b.url != url);
         self.save()
     }
 
+    #[allow(dead_code)]
     pub fn list(&self) -> &[Bookmark] {
         &self.bookmarks
     }
