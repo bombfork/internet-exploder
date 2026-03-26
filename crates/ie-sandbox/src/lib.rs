@@ -19,4 +19,4 @@ pub mod process;
 pub use channel::IpcChannel;
 pub use error::IpcError;
 pub use message::IpcMessage;
-pub use process::{ProcessKind, spawn_child};
+pub use process::{ChildHandle, ProcessKind, spawn_child, spawn_child_with_exe};

@@ -42,6 +42,28 @@ impl IpcChannel {
         ))
     }
 
+    /// Create a pair suitable for process spawning: returns (parent_channel, child_raw_fd).
+    /// The child fd is kept open (not CLOEXEC) so it survives fork+exec.
+    #[cfg(unix)]
+    pub fn pair_for_spawn() -> Result<(IpcChannel, std::os::unix::io::RawFd), IpcError> {
+        use std::os::unix::io::IntoRawFd;
+        let (std_a, std_b) = std::os::unix::net::UnixStream::pair()?;
+        let child_fd = std_b.into_raw_fd();
+        // Clear CLOEXEC on child fd so it survives exec
+        unsafe {
+            let flags = libc::fcntl(child_fd, libc::F_GETFD);
+            libc::fcntl(child_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
+        }
+        std_a.set_nonblocking(true)?;
+        let tok_a = tokio::net::UnixStream::from_std(std_a)?;
+        let (a_read, a_write) = tok_a.into_split();
+        let parent_channel = IpcChannel {
+            reader: BufReader::new(a_read),
+            writer: a_write,
+        };
+        Ok((parent_channel, child_fd))
+    }
+
     /// Reconstruct a channel from a raw file descriptor (for child processes).
     #[cfg(unix)]
     pub fn from_raw_fd(fd: std::os::unix::io::RawFd) -> Result<Self, IpcError> {

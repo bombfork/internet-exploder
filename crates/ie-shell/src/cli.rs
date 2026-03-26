@@ -31,6 +31,10 @@ pub struct Cli {
     /// Override data directory (bookmarks, etc.)
     #[arg(long)]
     pub data_dir: Option<String>,
+
+    /// Internal: subprocess kind (not shown in help)
+    #[arg(long, hide = true)]
+    pub subprocess_kind: Option<String>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -41,6 +45,9 @@ pub enum Mode {
     Headless {
         url: Option<Url>,
         action: HeadlessAction,
+    },
+    Subprocess {
+        kind: ie_sandbox::ProcessKind,
     },
 }
 
@@ -53,6 +60,12 @@ pub enum HeadlessAction {
 
 impl Cli {
     pub fn mode(&self) -> Result<Mode> {
+        if let Some(kind_str) = &self.subprocess_kind {
+            let kind = ie_sandbox::ProcessKind::parse(kind_str)
+                .ok_or_else(|| anyhow::anyhow!("invalid subprocess kind: {kind_str}"))?;
+            return Ok(Mode::Subprocess { kind });
+        }
+
         let url = self
             .url
             .as_deref()

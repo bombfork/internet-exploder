@@ -1891,6 +1891,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "libc",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -1913,6 +1914,7 @@ dependencies = [
  "ie-dom",
  "ie-net",
  "ie-sandbox",
+ "libc",
  "serde",
  "serde_json",
  "softbuffer",

@@ -13,6 +13,8 @@
 
 mod app;
 mod bookmarks;
+mod child_network;
+mod child_renderer;
 mod cli;
 mod headless;
 mod keybindings;
@@ -36,6 +38,7 @@ fn main() -> Result<()> {
         Mode::Headless { url, action } => {
             headless::run_headless(url, action, cli.allow_http, cli.data_dir)
         }
+        Mode::Subprocess { kind } => run_subprocess(kind),
     }
 }
 
@@ -51,4 +54,30 @@ fn run_gui(url: Option<url::Url>, allow_http: bool) -> Result<()> {
     let mut browser = app::Browser::new(url, allow_http, proxy);
     event_loop.run_app(&mut browser)?;
     Ok(())
+}
+
+fn run_subprocess(kind: ie_sandbox::ProcessKind) -> Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        let channel = reconstruct_ipc_channel()?;
+        match kind {
+            ie_sandbox::ProcessKind::Network => child_network::run_network_process(channel).await,
+            ie_sandbox::ProcessKind::Renderer => {
+                child_renderer::run_renderer_process(channel).await
+            }
+            ie_sandbox::ProcessKind::Browser => {
+                anyhow::bail!("browser process cannot be a subprocess")
+            }
+        }
+    })
+}
+
+#[cfg(unix)]
+fn reconstruct_ipc_channel() -> Result<ie_sandbox::IpcChannel> {
+    let fd_str = std::env::var("IE_IPC_FD")
+        .map_err(|_| anyhow::anyhow!("IE_IPC_FD environment variable not set"))?;
+    let fd: i32 = fd_str
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid IE_IPC_FD: {e}"))?;
+    Ok(ie_sandbox::IpcChannel::from_raw_fd(fd)?)
 }
