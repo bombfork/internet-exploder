@@ -4,6 +4,10 @@ use ie_sandbox::message::IpcMessage;
 use url::Url;
 
 pub async fn run_network_process(mut channel: IpcChannel) -> Result<()> {
+    // Apply sandbox BEFORE any untrusted work
+    let sandbox_result = ie_sandbox::apply_sandbox(ie_sandbox::SandboxProfile::Network)?;
+    tracing::info!("network process sandbox: {sandbox_result:?}");
+
     let client = ie_net::Client::new()?.with_https_only(false);
     tracing::info!("network process started");
 

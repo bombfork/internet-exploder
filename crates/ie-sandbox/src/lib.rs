@@ -15,8 +15,14 @@ pub mod channel;
 pub mod error;
 pub mod message;
 pub mod process;
+pub mod sandbox;
+#[cfg(target_os = "linux")]
+pub mod sandbox_linux;
+#[cfg(target_os = "macos")]
+pub mod sandbox_macos;
 
 pub use channel::IpcChannel;
 pub use error::IpcError;
 pub use message::IpcMessage;
 pub use process::{ChildHandle, ProcessKind, spawn_child, spawn_child_with_exe};
+pub use sandbox::{SandboxProfile, SandboxResult, apply_sandbox};
