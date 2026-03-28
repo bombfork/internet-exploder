@@ -30,21 +30,47 @@ pub struct Browser {
     overlay: OverlayState,
     navigator: Arc<dyn NavigationService + Send + Sync>,
     tokio_runtime: tokio::runtime::Runtime,
+    _network_child: Option<ie_sandbox::ChildHandle>,
     modifiers: ModifiersState,
     event_loop_proxy: EventLoopProxy<UserEvent>,
 }
 
 impl Browser {
-    pub fn new(url: Option<Url>, allow_http: bool, proxy: EventLoopProxy<UserEvent>) -> Self {
-        let navigator = InProcessNavigator::new()
-            .expect("failed to create navigator")
-            .with_https_only(!allow_http);
+    pub fn new(
+        url: Option<Url>,
+        allow_http: bool,
+        single_process: bool,
+        proxy: EventLoopProxy<UserEvent>,
+    ) -> Self {
+        let tokio_runtime = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+
+        let (navigator, network_child): (
+            Arc<dyn NavigationService + Send + Sync>,
+            Option<ie_sandbox::ChildHandle>,
+        ) = if single_process {
+            let nav = InProcessNavigator::new()
+                .expect("failed to create navigator")
+                .with_https_only(!allow_http);
+            (Arc::new(nav), None)
+        } else {
+            let (nav, child) = tokio_runtime.block_on(async {
+                let mut child = ie_sandbox::spawn_child(ie_sandbox::ProcessKind::Network)
+                    .await
+                    .expect("failed to spawn network process");
+                let channel = child.take_channel();
+                (
+                    crate::ipc_navigator::IpcNavigator::new(channel, !allow_http),
+                    child,
+                )
+            });
+            (Arc::new(nav), Some(child))
+        };
+
         let data_dir = dirs_data_dir().unwrap_or_else(|| PathBuf::from("."));
         let bookmark_store = BookmarkStore::new(&data_dir).unwrap_or_else(|e| {
             tracing::warn!("failed to load bookmarks: {e}");
             BookmarkStore::new(&std::env::temp_dir()).expect("failed to create bookmark store")
         });
-        let tokio_runtime = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
 
         let mut browser = Self {
             window: None,
@@ -52,8 +78,9 @@ impl Browser {
             tab_manager: TabManager::new(),
             bookmark_store,
             overlay: OverlayState::None,
-            navigator: Arc::new(navigator),
+            navigator,
             tokio_runtime,
+            _network_child: network_child,
             modifiers: ModifiersState::empty(),
             event_loop_proxy: proxy,
         };

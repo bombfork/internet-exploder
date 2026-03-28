@@ -21,7 +21,7 @@ pub mod sandbox_linux;
 #[cfg(target_os = "macos")]
 pub mod sandbox_macos;
 
-pub use channel::IpcChannel;
+pub use channel::{IpcChannel, IpcReceiver, IpcSender};
 pub use error::IpcError;
 pub use message::IpcMessage;
 pub use process::{ChildHandle, ProcessKind, spawn_child, spawn_child_with_exe};

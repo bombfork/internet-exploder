@@ -32,6 +32,10 @@ pub struct Cli {
     #[arg(long)]
     pub data_dir: Option<String>,
 
+    /// Run everything in a single process (no sandboxing, no IPC)
+    #[arg(long)]
+    pub single_process: bool,
+
     /// Internal: subprocess kind (not shown in help)
     #[arg(long, hide = true)]
     pub subprocess_kind: Option<String>,

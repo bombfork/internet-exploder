@@ -17,6 +17,7 @@ mod child_network;
 mod child_renderer;
 mod cli;
 mod headless;
+mod ipc_navigator;
 mod keybindings;
 mod navigation;
 mod overlay;
@@ -34,10 +35,14 @@ fn main() -> Result<()> {
     init_tracing();
 
     match cli.mode()? {
-        Mode::Gui { url } => run_gui(url, cli.allow_http),
-        Mode::Headless { url, action } => {
-            headless::run_headless(url, action, cli.allow_http, cli.data_dir)
-        }
+        Mode::Gui { url } => run_gui(url, cli.allow_http, cli.single_process),
+        Mode::Headless { url, action } => headless::run_headless(
+            url,
+            action,
+            cli.allow_http,
+            cli.data_dir,
+            cli.single_process,
+        ),
         Mode::Subprocess { kind } => run_subprocess(kind),
     }
 }
@@ -48,10 +53,10 @@ fn init_tracing() {
         .init();
 }
 
-fn run_gui(url: Option<url::Url>, allow_http: bool) -> Result<()> {
+fn run_gui(url: Option<url::Url>, allow_http: bool, single_process: bool) -> Result<()> {
     let event_loop = EventLoop::<app::UserEvent>::with_user_event().build()?;
     let proxy = event_loop.create_proxy();
-    let mut browser = app::Browser::new(url, allow_http, proxy);
+    let mut browser = app::Browser::new(url, allow_http, single_process, proxy);
     event_loop.run_app(&mut browser)?;
     Ok(())
 }

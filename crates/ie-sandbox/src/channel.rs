@@ -23,6 +23,14 @@ pub struct IpcChannel {
     writer: WriteHalf,
 }
 
+pub struct IpcSender {
+    writer: WriteHalf,
+}
+
+pub struct IpcReceiver {
+    reader: BufReader<ReadHalf>,
+}
+
 impl IpcChannel {
     /// Create a connected pair of IPC channels.
     #[cfg(unix)]
@@ -76,6 +84,18 @@ impl IpcChannel {
             reader: BufReader::new(read),
             writer: write,
         })
+    }
+
+    /// Split into separate sender and receiver halves.
+    pub fn into_halves(self) -> (IpcSender, IpcReceiver) {
+        (
+            IpcSender {
+                writer: self.writer,
+            },
+            IpcReceiver {
+                reader: self.reader,
+            },
+        )
     }
 
     /// Send a serializable message with length prefix.
@@ -135,6 +155,48 @@ impl IpcChannel {
         self.writer.write_all(data).await?;
         self.writer.flush().await?;
         Ok(())
+    }
+}
+
+impl IpcSender {
+    pub async fn send<T: Serialize>(&mut self, msg: &T) -> Result<(), IpcError> {
+        let payload =
+            serde_json::to_vec(msg).map_err(|e| IpcError::SerializationError(e.to_string()))?;
+        if payload.len() > MAX_MESSAGE_SIZE {
+            return Err(IpcError::MessageTooLarge(payload.len(), MAX_MESSAGE_SIZE));
+        }
+        self.writer
+            .write_all(&(payload.len() as u32).to_be_bytes())
+            .await?;
+        self.writer.write_all(&payload).await?;
+        self.writer.flush().await?;
+        Ok(())
+    }
+}
+
+impl IpcReceiver {
+    pub async fn recv<T: DeserializeOwned>(&mut self) -> Result<T, IpcError> {
+        let mut len_buf = [0u8; LENGTH_PREFIX_SIZE];
+        match self.reader.read_exact(&mut len_buf).await {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                return Err(IpcError::ConnectionClosed);
+            }
+            Err(e) => return Err(IpcError::Io(e)),
+        }
+        let size = u32::from_be_bytes(len_buf) as usize;
+        if size > MAX_MESSAGE_SIZE {
+            return Err(IpcError::MessageTooLarge(size, MAX_MESSAGE_SIZE));
+        }
+        let mut buf = vec![0u8; size];
+        match self.reader.read_exact(&mut buf).await {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                return Err(IpcError::ConnectionClosed);
+            }
+            Err(e) => return Err(IpcError::Io(e)),
+        }
+        serde_json::from_slice(&buf).map_err(|e| IpcError::DeserializationError(e.to_string()))
     }
 }
 

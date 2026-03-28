@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -7,6 +8,7 @@ use url::Url;
 
 use crate::bookmarks::BookmarkStore;
 use crate::cli::HeadlessAction;
+use crate::ipc_navigator::IpcNavigator;
 use crate::navigation::{InProcessNavigator, NavigationService};
 use crate::tab::{TabId, TabManager, TabState};
 
@@ -15,20 +17,50 @@ pub fn run_headless(
     action: HeadlessAction,
     allow_http: bool,
     data_dir: Option<String>,
+    single_process: bool,
 ) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         match action {
-            HeadlessAction::DumpSource => run_dump_source(url.unwrap(), allow_http).await,
-            HeadlessAction::DumpStatus => run_dump_status(url.unwrap(), allow_http).await,
-            HeadlessAction::Interactive => run_interactive(allow_http, data_dir).await,
+            HeadlessAction::DumpSource => {
+                run_dump_source(url.unwrap(), allow_http, single_process).await
+            }
+            HeadlessAction::DumpStatus => {
+                run_dump_status(url.unwrap(), allow_http, single_process).await
+            }
+            HeadlessAction::Interactive => {
+                run_interactive(allow_http, data_dir, single_process).await
+            }
         }
     })
 }
 
-async fn run_dump_source(url: Url, allow_http: bool) -> Result<()> {
-    let navigator = InProcessNavigator::new()?.with_https_only(!allow_http);
-    match navigator.navigate(&url).await {
+struct NavigatorHandle {
+    navigator: Arc<dyn NavigationService + Send + Sync>,
+    _child: Option<ie_sandbox::ChildHandle>,
+}
+
+async fn create_navigator(allow_http: bool, single_process: bool) -> Result<NavigatorHandle> {
+    if single_process {
+        let nav = InProcessNavigator::new()?.with_https_only(!allow_http);
+        Ok(NavigatorHandle {
+            navigator: Arc::new(nav),
+            _child: None,
+        })
+    } else {
+        let mut child = ie_sandbox::spawn_child(ie_sandbox::ProcessKind::Network).await?;
+        let channel = child.take_channel();
+        let nav = IpcNavigator::new(channel, !allow_http);
+        Ok(NavigatorHandle {
+            navigator: Arc::new(nav),
+            _child: Some(child),
+        })
+    }
+}
+
+async fn run_dump_source(url: Url, allow_http: bool, single_process: bool) -> Result<()> {
+    let handle = create_navigator(allow_http, single_process).await?;
+    match handle.navigator.navigate(&url).await {
         Ok(result) => {
             let text = String::from_utf8_lossy(&result.body);
             print!("{text}");
@@ -41,9 +73,9 @@ async fn run_dump_source(url: Url, allow_http: bool) -> Result<()> {
     }
 }
 
-async fn run_dump_status(url: Url, allow_http: bool) -> Result<()> {
-    let navigator = InProcessNavigator::new()?.with_https_only(!allow_http);
-    match navigator.navigate(&url).await {
+async fn run_dump_status(url: Url, allow_http: bool, single_process: bool) -> Result<()> {
+    let handle = create_navigator(allow_http, single_process).await?;
+    match handle.navigator.navigate(&url).await {
         Ok(result) => {
             println!("{}", result.status);
             Ok(())
@@ -122,12 +154,13 @@ impl Response {
 struct HeadlessSession {
     tab_manager: TabManager,
     bookmark_store: BookmarkStore,
-    navigator: InProcessNavigator,
+    navigator: Arc<dyn NavigationService + Send + Sync>,
+    _child: Option<ie_sandbox::ChildHandle>,
 }
 
 impl HeadlessSession {
-    fn new(allow_http: bool, data_dir: Option<String>) -> Result<Self> {
-        let navigator = InProcessNavigator::new()?.with_https_only(!allow_http);
+    async fn new(allow_http: bool, data_dir: Option<String>, single_process: bool) -> Result<Self> {
+        let handle = create_navigator(allow_http, single_process).await?;
         let bookmark_path = data_dir
             .map(PathBuf::from)
             .unwrap_or_else(|| std::env::temp_dir().join("ie-headless"));
@@ -135,7 +168,8 @@ impl HeadlessSession {
         Ok(Self {
             tab_manager: TabManager::new(),
             bookmark_store,
-            navigator,
+            navigator: handle.navigator,
+            _child: handle._child,
         })
     }
 
@@ -169,7 +203,6 @@ impl HeadlessSession {
             tab.url = Some(url.clone());
         }
 
-        // Sequential: navigate blocks until complete
         match self.navigator.navigate(&url).await {
             Ok(result) => {
                 let source = String::from_utf8(result.body).ok();
@@ -303,10 +336,14 @@ impl HeadlessSession {
     }
 }
 
-async fn run_interactive(allow_http: bool, data_dir: Option<String>) -> Result<()> {
+async fn run_interactive(
+    allow_http: bool,
+    data_dir: Option<String>,
+    single_process: bool,
+) -> Result<()> {
     let stdin = BufReader::new(tokio::io::stdin());
     let mut stdout = tokio::io::stdout();
-    let mut session = HeadlessSession::new(allow_http, data_dir)?;
+    let mut session = HeadlessSession::new(allow_http, data_dir, single_process).await?;
 
     let mut lines = stdin.lines();
     while let Ok(Some(line)) = lines.next_line().await {

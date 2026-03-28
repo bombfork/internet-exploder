@@ -34,7 +34,7 @@ impl ProcessKind {
 
 pub struct ChildHandle {
     process: tokio::process::Child,
-    channel: IpcChannel,
+    channel: Option<IpcChannel>,
     kind: ProcessKind,
 }
 
@@ -42,7 +42,12 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 impl ChildHandle {
     pub fn channel(&mut self) -> &mut IpcChannel {
-        &mut self.channel
+        self.channel.as_mut().expect("channel already taken")
+    }
+
+    /// Take ownership of the IPC channel (for IpcNavigator).
+    pub fn take_channel(&mut self) -> IpcChannel {
+        self.channel.take().expect("channel already taken")
     }
 
     pub fn kind(&self) -> ProcessKind {
@@ -59,7 +64,9 @@ impl ChildHandle {
 
     /// Graceful shutdown: send Shutdown, wait, kill if timeout.
     pub async fn shutdown(&mut self) -> anyhow::Result<()> {
-        let _ = self.channel.send(&IpcMessage::Shutdown).await;
+        if let Some(channel) = &mut self.channel {
+            let _ = channel.send(&IpcMessage::Shutdown).await;
+        }
         match timeout(SHUTDOWN_TIMEOUT, self.process.wait()).await {
             Ok(Ok(status)) => {
                 tracing::info!("{:?} process exited with status: {}", self.kind, status);
@@ -135,7 +142,7 @@ pub async fn spawn_child_with_exe(
 
     Ok(ChildHandle {
         process,
-        channel: parent_channel,
+        channel: Some(parent_channel),
         kind,
     })
 }
