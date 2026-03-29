@@ -3,6 +3,7 @@
 //! WHATWG HTML Living Standard parser.
 //! Targets latest spec only — no quirks mode, no legacy element support.
 
+pub mod entities;
 pub mod token;
 pub mod tokenizer;
 pub mod tree_builder;

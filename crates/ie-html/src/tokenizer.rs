@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+use crate::entities;
 use crate::token::{Attribute, Token};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -161,15 +162,14 @@ pub struct Tokenizer<'a> {
     chars: Vec<char>,
     pos: usize,
     state: TokenizerState,
-    #[allow(dead_code)]
     return_state: TokenizerState,
     pending_tokens: VecDeque<Token>,
     current_tag: Option<TagBuilder>,
     current_comment: String,
     current_doctype: DoctypeBuilder,
-    #[allow(dead_code)]
     temp_buffer: String,
     last_start_tag_name: Option<String>,
+    char_ref_code: u32,
     finished: bool,
 }
 
@@ -187,6 +187,7 @@ impl<'a> Tokenizer<'a> {
             current_doctype: DoctypeBuilder::default(),
             temp_buffer: String::new(),
             last_start_tag_name: None,
+            char_ref_code: 0,
             finished: false,
         }
     }
@@ -211,7 +212,6 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-    #[allow(dead_code)]
     fn peek_char(&self) -> Option<char> {
         self.chars.get(self.pos).copied()
     }
@@ -265,6 +265,10 @@ impl<'a> Tokenizer<'a> {
     fn step(&mut self) {
         match self.state {
             TokenizerState::Data => match self.next_char() {
+                Some('&') => {
+                    self.return_state = TokenizerState::Data;
+                    self.state = TokenizerState::CharacterReference;
+                }
                 Some('<') => self.state = TokenizerState::TagOpen,
                 Some('\0') => {
                     tracing::warn!("HTML parse error: unexpected-null-character");
@@ -429,6 +433,10 @@ impl<'a> Tokenizer<'a> {
             }
             TokenizerState::AttributeValueDoubleQuoted => match self.next_char() {
                 Some('"') => self.state = TokenizerState::AfterAttributeValueQuoted,
+                Some('&') => {
+                    self.return_state = TokenizerState::AttributeValueDoubleQuoted;
+                    self.state = TokenizerState::CharacterReference;
+                }
                 Some('\0') => {
                     tracing::warn!("HTML parse error: unexpected-null-character");
                     self.push_to_attr_value('\u{FFFD}');
@@ -443,6 +451,10 @@ impl<'a> Tokenizer<'a> {
             },
             TokenizerState::AttributeValueSingleQuoted => match self.next_char() {
                 Some('\'') => self.state = TokenizerState::AfterAttributeValueQuoted,
+                Some('&') => {
+                    self.return_state = TokenizerState::AttributeValueSingleQuoted;
+                    self.state = TokenizerState::CharacterReference;
+                }
                 Some('\0') => {
                     tracing::warn!("HTML parse error: unexpected-null-character");
                     self.push_to_attr_value('\u{FFFD}');
@@ -458,6 +470,10 @@ impl<'a> Tokenizer<'a> {
             TokenizerState::AttributeValueUnquoted => match self.next_char() {
                 Some('\t' | '\n' | '\x0C' | ' ') => {
                     self.state = TokenizerState::BeforeAttributeName;
+                }
+                Some('&') => {
+                    self.return_state = TokenizerState::AttributeValueUnquoted;
+                    self.state = TokenizerState::CharacterReference;
                 }
                 Some('>') => {
                     self.state = TokenizerState::Data;
@@ -865,49 +881,715 @@ impl<'a> Tokenizer<'a> {
                     self.state = TokenizerState::CDataSection;
                 }
             },
-            // States that will be implemented in Step 1b
-            TokenizerState::RcData
-            | TokenizerState::RawText
-            | TokenizerState::ScriptData
-            | TokenizerState::PlainText
-            | TokenizerState::RcDataLessThanSign
-            | TokenizerState::RcDataEndTagOpen
-            | TokenizerState::RcDataEndTagName
-            | TokenizerState::RawTextLessThanSign
-            | TokenizerState::RawTextEndTagOpen
-            | TokenizerState::RawTextEndTagName
-            | TokenizerState::ScriptDataLessThanSign
-            | TokenizerState::ScriptDataEndTagOpen
-            | TokenizerState::ScriptDataEndTagName
-            | TokenizerState::ScriptDataEscapeStart
-            | TokenizerState::ScriptDataEscapeStartDash
-            | TokenizerState::ScriptDataEscaped
-            | TokenizerState::ScriptDataEscapedDash
-            | TokenizerState::ScriptDataEscapedDashDash
-            | TokenizerState::ScriptDataEscapedLessThanSign
-            | TokenizerState::ScriptDataEscapedEndTagOpen
-            | TokenizerState::ScriptDataEscapedEndTagName
-            | TokenizerState::ScriptDataDoubleEscapeStart
-            | TokenizerState::ScriptDataDoubleEscaped
-            | TokenizerState::ScriptDataDoubleEscapedDash
-            | TokenizerState::ScriptDataDoubleEscapedDashDash
-            | TokenizerState::ScriptDataDoubleEscapedLessThanSign
-            | TokenizerState::ScriptDataDoubleEscapeEnd
-            | TokenizerState::CharacterReference
-            | TokenizerState::NumericCharacterReference
-            | TokenizerState::HexadecimalCharacterReferenceStart
-            | TokenizerState::DecimalCharacterReferenceStart
-            | TokenizerState::HexadecimalCharacterReference
-            | TokenizerState::DecimalCharacterReference
-            | TokenizerState::NumericCharacterReferenceEnd
-            | TokenizerState::NamedCharacterReference
-            | TokenizerState::AmbiguousAmpersand => {
-                // Placeholder: emit characters as-is until these states are implemented
-                match self.next_char() {
-                    Some(c) => self.emit(Token::Character(c)),
-                    None => self.emit(Token::Eof),
+            // RCDATA states
+            TokenizerState::RcData => match self.next_char() {
+                Some('&') => {
+                    self.return_state = TokenizerState::RcData;
+                    self.state = TokenizerState::CharacterReference;
+                }
+                Some('<') => self.state = TokenizerState::RcDataLessThanSign,
+                Some('\0') => {
+                    tracing::warn!("HTML parse error: unexpected-null-character");
+                    self.emit(Token::Character('\u{FFFD}'));
+                }
+                Some(c) => self.emit(Token::Character(c)),
+                None => self.emit(Token::Eof),
+            },
+            TokenizerState::RcDataLessThanSign => match self.next_char() {
+                Some('/') => {
+                    self.temp_buffer.clear();
+                    self.state = TokenizerState::RcDataEndTagOpen;
+                }
+                _ => {
+                    self.emit(Token::Character('<'));
+                    self.reconsume();
+                    self.state = TokenizerState::RcData;
+                }
+            },
+            TokenizerState::RcDataEndTagOpen => match self.next_char() {
+                Some(c) if c.is_ascii_alphabetic() => {
+                    self.current_tag = Some(TagBuilder::new_end());
+                    self.reconsume();
+                    self.state = TokenizerState::RcDataEndTagName;
+                }
+                _ => {
+                    self.emit(Token::Character('<'));
+                    self.emit(Token::Character('/'));
+                    self.reconsume();
+                    self.state = TokenizerState::RcData;
+                }
+            },
+            TokenizerState::RcDataEndTagName => match self.next_char() {
+                Some(c @ ('\t' | '\n' | '\x0C' | ' ')) if self.is_appropriate_end_tag() => {
+                    let _ = c;
+                    self.state = TokenizerState::BeforeAttributeName;
+                }
+                Some('/') if self.is_appropriate_end_tag() => {
+                    self.state = TokenizerState::SelfClosingStartTag;
+                }
+                Some('>') if self.is_appropriate_end_tag() => {
+                    self.state = TokenizerState::Data;
+                    self.emit_current_tag();
+                }
+                Some(c) if c.is_ascii_alphabetic() => {
+                    self.push_to_tag_name(c.to_ascii_lowercase());
+                    self.temp_buffer.push(c);
+                }
+                _ => {
+                    self.emit(Token::Character('<'));
+                    self.emit(Token::Character('/'));
+                    for c in self.temp_buffer.drain(..).collect::<Vec<_>>() {
+                        self.emit(Token::Character(c));
+                    }
+                    self.reconsume();
+                    self.state = TokenizerState::RcData;
+                }
+            },
+
+            // RAWTEXT states
+            TokenizerState::RawText => match self.next_char() {
+                Some('<') => self.state = TokenizerState::RawTextLessThanSign,
+                Some('\0') => {
+                    tracing::warn!("HTML parse error: unexpected-null-character");
+                    self.emit(Token::Character('\u{FFFD}'));
+                }
+                Some(c) => self.emit(Token::Character(c)),
+                None => self.emit(Token::Eof),
+            },
+            TokenizerState::RawTextLessThanSign => match self.next_char() {
+                Some('/') => {
+                    self.temp_buffer.clear();
+                    self.state = TokenizerState::RawTextEndTagOpen;
+                }
+                _ => {
+                    self.emit(Token::Character('<'));
+                    self.reconsume();
+                    self.state = TokenizerState::RawText;
+                }
+            },
+            TokenizerState::RawTextEndTagOpen => match self.next_char() {
+                Some(c) if c.is_ascii_alphabetic() => {
+                    self.current_tag = Some(TagBuilder::new_end());
+                    self.reconsume();
+                    self.state = TokenizerState::RawTextEndTagName;
+                }
+                _ => {
+                    self.emit(Token::Character('<'));
+                    self.emit(Token::Character('/'));
+                    self.reconsume();
+                    self.state = TokenizerState::RawText;
+                }
+            },
+            TokenizerState::RawTextEndTagName => match self.next_char() {
+                Some(c @ ('\t' | '\n' | '\x0C' | ' ')) if self.is_appropriate_end_tag() => {
+                    let _ = c;
+                    self.state = TokenizerState::BeforeAttributeName;
+                }
+                Some('/') if self.is_appropriate_end_tag() => {
+                    self.state = TokenizerState::SelfClosingStartTag;
+                }
+                Some('>') if self.is_appropriate_end_tag() => {
+                    self.state = TokenizerState::Data;
+                    self.emit_current_tag();
+                }
+                Some(c) if c.is_ascii_alphabetic() => {
+                    self.push_to_tag_name(c.to_ascii_lowercase());
+                    self.temp_buffer.push(c);
+                }
+                _ => {
+                    self.emit(Token::Character('<'));
+                    self.emit(Token::Character('/'));
+                    for c in self.temp_buffer.drain(..).collect::<Vec<_>>() {
+                        self.emit(Token::Character(c));
+                    }
+                    self.reconsume();
+                    self.state = TokenizerState::RawText;
+                }
+            },
+
+            // SCRIPT DATA states
+            TokenizerState::ScriptData => match self.next_char() {
+                Some('<') => self.state = TokenizerState::ScriptDataLessThanSign,
+                Some('\0') => {
+                    tracing::warn!("HTML parse error: unexpected-null-character");
+                    self.emit(Token::Character('\u{FFFD}'));
+                }
+                Some(c) => self.emit(Token::Character(c)),
+                None => self.emit(Token::Eof),
+            },
+            TokenizerState::ScriptDataLessThanSign => match self.next_char() {
+                Some('/') => {
+                    self.temp_buffer.clear();
+                    self.state = TokenizerState::ScriptDataEndTagOpen;
+                }
+                Some('!') => {
+                    self.emit(Token::Character('<'));
+                    self.emit(Token::Character('!'));
+                    self.state = TokenizerState::ScriptDataEscapeStart;
+                }
+                _ => {
+                    self.emit(Token::Character('<'));
+                    self.reconsume();
+                    self.state = TokenizerState::ScriptData;
+                }
+            },
+            TokenizerState::ScriptDataEndTagOpen => match self.next_char() {
+                Some(c) if c.is_ascii_alphabetic() => {
+                    self.current_tag = Some(TagBuilder::new_end());
+                    self.reconsume();
+                    self.state = TokenizerState::ScriptDataEndTagName;
+                }
+                _ => {
+                    self.emit(Token::Character('<'));
+                    self.emit(Token::Character('/'));
+                    self.reconsume();
+                    self.state = TokenizerState::ScriptData;
+                }
+            },
+            TokenizerState::ScriptDataEndTagName => match self.next_char() {
+                Some(c @ ('\t' | '\n' | '\x0C' | ' ')) if self.is_appropriate_end_tag() => {
+                    let _ = c;
+                    self.state = TokenizerState::BeforeAttributeName;
+                }
+                Some('/') if self.is_appropriate_end_tag() => {
+                    self.state = TokenizerState::SelfClosingStartTag;
+                }
+                Some('>') if self.is_appropriate_end_tag() => {
+                    self.state = TokenizerState::Data;
+                    self.emit_current_tag();
+                }
+                Some(c) if c.is_ascii_alphabetic() => {
+                    self.push_to_tag_name(c.to_ascii_lowercase());
+                    self.temp_buffer.push(c);
+                }
+                _ => {
+                    self.emit(Token::Character('<'));
+                    self.emit(Token::Character('/'));
+                    for c in self.temp_buffer.drain(..).collect::<Vec<_>>() {
+                        self.emit(Token::Character(c));
+                    }
+                    self.reconsume();
+                    self.state = TokenizerState::ScriptData;
+                }
+            },
+            TokenizerState::ScriptDataEscapeStart => match self.next_char() {
+                Some('-') => {
+                    self.emit(Token::Character('-'));
+                    self.state = TokenizerState::ScriptDataEscapeStartDash;
+                }
+                _ => {
+                    self.reconsume();
+                    self.state = TokenizerState::ScriptData;
+                }
+            },
+            TokenizerState::ScriptDataEscapeStartDash => match self.next_char() {
+                Some('-') => {
+                    self.emit(Token::Character('-'));
+                    self.state = TokenizerState::ScriptDataEscapedDashDash;
+                }
+                _ => {
+                    self.reconsume();
+                    self.state = TokenizerState::ScriptData;
+                }
+            },
+            TokenizerState::ScriptDataEscaped => match self.next_char() {
+                Some('-') => {
+                    self.emit(Token::Character('-'));
+                    self.state = TokenizerState::ScriptDataEscapedDash;
+                }
+                Some('<') => self.state = TokenizerState::ScriptDataEscapedLessThanSign,
+                Some('\0') => {
+                    tracing::warn!("HTML parse error: unexpected-null-character");
+                    self.emit(Token::Character('\u{FFFD}'));
+                }
+                Some(c) => self.emit(Token::Character(c)),
+                None => {
+                    tracing::warn!("HTML parse error: eof-in-script-html-comment-like-text");
+                    self.emit(Token::Eof);
+                }
+            },
+            TokenizerState::ScriptDataEscapedDash => match self.next_char() {
+                Some('-') => {
+                    self.emit(Token::Character('-'));
+                    self.state = TokenizerState::ScriptDataEscapedDashDash;
+                }
+                Some('<') => self.state = TokenizerState::ScriptDataEscapedLessThanSign,
+                Some('\0') => {
+                    tracing::warn!("HTML parse error: unexpected-null-character");
+                    self.emit(Token::Character('\u{FFFD}'));
+                    self.state = TokenizerState::ScriptDataEscaped;
+                }
+                Some(c) => {
+                    self.emit(Token::Character(c));
+                    self.state = TokenizerState::ScriptDataEscaped;
+                }
+                None => {
+                    tracing::warn!("HTML parse error: eof-in-script-html-comment-like-text");
+                    self.emit(Token::Eof);
+                }
+            },
+            TokenizerState::ScriptDataEscapedDashDash => match self.next_char() {
+                Some('-') => self.emit(Token::Character('-')),
+                Some('<') => self.state = TokenizerState::ScriptDataEscapedLessThanSign,
+                Some('>') => {
+                    self.emit(Token::Character('>'));
+                    self.state = TokenizerState::ScriptData;
+                }
+                Some('\0') => {
+                    tracing::warn!("HTML parse error: unexpected-null-character");
+                    self.emit(Token::Character('\u{FFFD}'));
+                    self.state = TokenizerState::ScriptDataEscaped;
+                }
+                Some(c) => {
+                    self.emit(Token::Character(c));
+                    self.state = TokenizerState::ScriptDataEscaped;
+                }
+                None => {
+                    tracing::warn!("HTML parse error: eof-in-script-html-comment-like-text");
+                    self.emit(Token::Eof);
+                }
+            },
+            TokenizerState::ScriptDataEscapedLessThanSign => match self.next_char() {
+                Some('/') => {
+                    self.temp_buffer.clear();
+                    self.state = TokenizerState::ScriptDataEscapedEndTagOpen;
+                }
+                Some(c) if c.is_ascii_alphabetic() => {
+                    self.temp_buffer.clear();
+                    self.emit(Token::Character('<'));
+                    self.reconsume();
+                    self.state = TokenizerState::ScriptDataDoubleEscapeStart;
+                }
+                _ => {
+                    self.emit(Token::Character('<'));
+                    self.reconsume();
+                    self.state = TokenizerState::ScriptDataEscaped;
+                }
+            },
+            TokenizerState::ScriptDataEscapedEndTagOpen => match self.next_char() {
+                Some(c) if c.is_ascii_alphabetic() => {
+                    self.current_tag = Some(TagBuilder::new_end());
+                    self.reconsume();
+                    self.state = TokenizerState::ScriptDataEscapedEndTagName;
+                }
+                _ => {
+                    self.emit(Token::Character('<'));
+                    self.emit(Token::Character('/'));
+                    self.reconsume();
+                    self.state = TokenizerState::ScriptDataEscaped;
+                }
+            },
+            TokenizerState::ScriptDataEscapedEndTagName => match self.next_char() {
+                Some(c @ ('\t' | '\n' | '\x0C' | ' ')) if self.is_appropriate_end_tag() => {
+                    let _ = c;
+                    self.state = TokenizerState::BeforeAttributeName;
+                }
+                Some('/') if self.is_appropriate_end_tag() => {
+                    self.state = TokenizerState::SelfClosingStartTag;
+                }
+                Some('>') if self.is_appropriate_end_tag() => {
+                    self.state = TokenizerState::Data;
+                    self.emit_current_tag();
+                }
+                Some(c) if c.is_ascii_alphabetic() => {
+                    self.push_to_tag_name(c.to_ascii_lowercase());
+                    self.temp_buffer.push(c);
+                }
+                _ => {
+                    self.emit(Token::Character('<'));
+                    self.emit(Token::Character('/'));
+                    for c in self.temp_buffer.drain(..).collect::<Vec<_>>() {
+                        self.emit(Token::Character(c));
+                    }
+                    self.reconsume();
+                    self.state = TokenizerState::ScriptDataEscaped;
+                }
+            },
+            TokenizerState::ScriptDataDoubleEscapeStart => match self.next_char() {
+                Some(c @ ('\t' | '\n' | '\x0C' | ' ' | '/' | '>')) => {
+                    if self.temp_buffer.eq_ignore_ascii_case("script") {
+                        self.state = TokenizerState::ScriptDataDoubleEscaped;
+                    } else {
+                        self.state = TokenizerState::ScriptDataEscaped;
+                    }
+                    self.emit(Token::Character(c));
+                }
+                Some(c) if c.is_ascii_alphabetic() => {
+                    self.temp_buffer.push(c.to_ascii_lowercase());
+                    self.emit(Token::Character(c));
+                }
+                _ => {
+                    self.reconsume();
+                    self.state = TokenizerState::ScriptDataEscaped;
+                }
+            },
+            TokenizerState::ScriptDataDoubleEscaped => match self.next_char() {
+                Some('-') => {
+                    self.emit(Token::Character('-'));
+                    self.state = TokenizerState::ScriptDataDoubleEscapedDash;
+                }
+                Some('<') => {
+                    self.emit(Token::Character('<'));
+                    self.state = TokenizerState::ScriptDataDoubleEscapedLessThanSign;
+                }
+                Some('\0') => {
+                    tracing::warn!("HTML parse error: unexpected-null-character");
+                    self.emit(Token::Character('\u{FFFD}'));
+                }
+                Some(c) => self.emit(Token::Character(c)),
+                None => {
+                    tracing::warn!("HTML parse error: eof-in-script-html-comment-like-text");
+                    self.emit(Token::Eof);
+                }
+            },
+            TokenizerState::ScriptDataDoubleEscapedDash => match self.next_char() {
+                Some('-') => {
+                    self.emit(Token::Character('-'));
+                    self.state = TokenizerState::ScriptDataDoubleEscapedDashDash;
+                }
+                Some('<') => {
+                    self.emit(Token::Character('<'));
+                    self.state = TokenizerState::ScriptDataDoubleEscapedLessThanSign;
+                }
+                Some('\0') => {
+                    tracing::warn!("HTML parse error: unexpected-null-character");
+                    self.emit(Token::Character('\u{FFFD}'));
+                    self.state = TokenizerState::ScriptDataDoubleEscaped;
+                }
+                Some(c) => {
+                    self.emit(Token::Character(c));
+                    self.state = TokenizerState::ScriptDataDoubleEscaped;
+                }
+                None => {
+                    tracing::warn!("HTML parse error: eof-in-script-html-comment-like-text");
+                    self.emit(Token::Eof);
+                }
+            },
+            TokenizerState::ScriptDataDoubleEscapedDashDash => match self.next_char() {
+                Some('-') => self.emit(Token::Character('-')),
+                Some('<') => {
+                    self.emit(Token::Character('<'));
+                    self.state = TokenizerState::ScriptDataDoubleEscapedLessThanSign;
+                }
+                Some('>') => {
+                    self.emit(Token::Character('>'));
+                    self.state = TokenizerState::ScriptData;
+                }
+                Some('\0') => {
+                    tracing::warn!("HTML parse error: unexpected-null-character");
+                    self.emit(Token::Character('\u{FFFD}'));
+                    self.state = TokenizerState::ScriptDataDoubleEscaped;
+                }
+                Some(c) => {
+                    self.emit(Token::Character(c));
+                    self.state = TokenizerState::ScriptDataDoubleEscaped;
+                }
+                None => {
+                    tracing::warn!("HTML parse error: eof-in-script-html-comment-like-text");
+                    self.emit(Token::Eof);
+                }
+            },
+            TokenizerState::ScriptDataDoubleEscapedLessThanSign => match self.next_char() {
+                Some('/') => {
+                    self.emit(Token::Character('/'));
+                    self.temp_buffer.clear();
+                    self.state = TokenizerState::ScriptDataDoubleEscapeEnd;
+                }
+                _ => {
+                    self.reconsume();
+                    self.state = TokenizerState::ScriptDataDoubleEscaped;
+                }
+            },
+            TokenizerState::ScriptDataDoubleEscapeEnd => match self.next_char() {
+                Some(c @ ('\t' | '\n' | '\x0C' | ' ' | '/' | '>')) => {
+                    if self.temp_buffer.eq_ignore_ascii_case("script") {
+                        self.state = TokenizerState::ScriptDataEscaped;
+                    } else {
+                        self.state = TokenizerState::ScriptDataDoubleEscaped;
+                    }
+                    self.emit(Token::Character(c));
+                }
+                Some(c) if c.is_ascii_alphabetic() => {
+                    self.temp_buffer.push(c.to_ascii_lowercase());
+                    self.emit(Token::Character(c));
+                }
+                _ => {
+                    self.reconsume();
+                    self.state = TokenizerState::ScriptDataDoubleEscaped;
+                }
+            },
+
+            // PLAINTEXT state
+            TokenizerState::PlainText => match self.next_char() {
+                Some('\0') => {
+                    tracing::warn!("HTML parse error: unexpected-null-character");
+                    self.emit(Token::Character('\u{FFFD}'));
+                }
+                Some(c) => self.emit(Token::Character(c)),
+                None => self.emit(Token::Eof),
+            },
+
+            // CHARACTER REFERENCE states
+            TokenizerState::CharacterReference => {
+                self.temp_buffer.clear();
+                self.temp_buffer.push('&');
+                match self.peek_char() {
+                    Some(c) if c.is_ascii_alphanumeric() => {
+                        self.state = TokenizerState::NamedCharacterReference;
+                    }
+                    Some('#') => {
+                        self.temp_buffer.push('#');
+                        self.pos += 1;
+                        self.state = TokenizerState::NumericCharacterReference;
+                    }
+                    _ => {
+                        self.flush_temp_buffer();
+                        self.state = self.return_state;
+                    }
                 }
             }
+            TokenizerState::NamedCharacterReference => {
+                let remaining = &self.chars[self.pos..];
+                if let Some((len, codepoints)) = entities::longest_match(remaining) {
+                    let matched_ends_with_semicolon = remaining.get(len - 1).copied() == Some(';');
+                    // Check if consumed as part of an attribute
+                    if self.is_return_state_attr() {
+                        let next_after = remaining.get(len).copied();
+                        if !matched_ends_with_semicolon
+                            && next_after.is_some_and(|c| c == '=' || c.is_ascii_alphanumeric())
+                        {
+                            // Treat as non-entity
+                            self.flush_temp_buffer();
+                            self.state = self.return_state;
+                            return;
+                        }
+                    }
+                    if !matched_ends_with_semicolon {
+                        tracing::warn!(
+                            "HTML parse error: missing-semicolon-after-character-reference"
+                        );
+                    }
+                    self.temp_buffer.clear();
+                    self.pos += len;
+                    for &cp in codepoints {
+                        if let Some(c) = char::from_u32(cp) {
+                            self.emit_char_ref_result(c);
+                        }
+                    }
+                    self.state = self.return_state;
+                } else {
+                    self.flush_temp_buffer();
+                    self.state = TokenizerState::AmbiguousAmpersand;
+                }
+            }
+            TokenizerState::AmbiguousAmpersand => match self.next_char() {
+                Some(c) if c.is_ascii_alphanumeric() => {
+                    if self.is_return_state_attr() {
+                        self.push_to_attr_value(c);
+                    } else {
+                        self.emit(Token::Character(c));
+                    }
+                }
+                Some(';') => {
+                    tracing::warn!("HTML parse error: unknown-named-character-reference");
+                    self.reconsume();
+                    self.state = self.return_state;
+                }
+                None => {
+                    self.state = self.return_state;
+                }
+                Some(_) => {
+                    self.reconsume();
+                    self.state = self.return_state;
+                }
+            },
+            TokenizerState::NumericCharacterReference => {
+                self.char_ref_code = 0;
+                match self.next_char() {
+                    Some(c @ ('x' | 'X')) => {
+                        self.temp_buffer.push(c);
+                        self.state = TokenizerState::HexadecimalCharacterReferenceStart;
+                    }
+                    _ => {
+                        self.reconsume();
+                        self.state = TokenizerState::DecimalCharacterReferenceStart;
+                    }
+                }
+            }
+            TokenizerState::HexadecimalCharacterReferenceStart => match self.next_char() {
+                Some(c) if c.is_ascii_hexdigit() => {
+                    self.reconsume();
+                    self.state = TokenizerState::HexadecimalCharacterReference;
+                }
+                _ => {
+                    tracing::warn!(
+                        "HTML parse error: absence-of-digits-in-numeric-character-reference"
+                    );
+                    self.flush_temp_buffer();
+                    self.reconsume();
+                    self.state = self.return_state;
+                }
+            },
+            TokenizerState::DecimalCharacterReferenceStart => match self.next_char() {
+                Some(c) if c.is_ascii_digit() => {
+                    self.reconsume();
+                    self.state = TokenizerState::DecimalCharacterReference;
+                }
+                _ => {
+                    tracing::warn!(
+                        "HTML parse error: absence-of-digits-in-numeric-character-reference"
+                    );
+                    self.flush_temp_buffer();
+                    self.reconsume();
+                    self.state = self.return_state;
+                }
+            },
+            TokenizerState::HexadecimalCharacterReference => match self.next_char() {
+                Some(c) if c.is_ascii_hexdigit() => {
+                    let digit = c.to_digit(16).unwrap();
+                    self.char_ref_code =
+                        self.char_ref_code.saturating_mul(16).saturating_add(digit);
+                    if self.char_ref_code > 0x10FFFF {
+                        self.char_ref_code = 0x10FFFF + 1;
+                    }
+                }
+                Some(';') => {
+                    self.state = TokenizerState::NumericCharacterReferenceEnd;
+                }
+                _ => {
+                    tracing::warn!("HTML parse error: missing-semicolon-after-character-reference");
+                    self.reconsume();
+                    self.state = TokenizerState::NumericCharacterReferenceEnd;
+                }
+            },
+            TokenizerState::DecimalCharacterReference => match self.next_char() {
+                Some(c) if c.is_ascii_digit() => {
+                    let digit = c.to_digit(10).unwrap();
+                    self.char_ref_code =
+                        self.char_ref_code.saturating_mul(10).saturating_add(digit);
+                    if self.char_ref_code > 0x10FFFF {
+                        self.char_ref_code = 0x10FFFF + 1;
+                    }
+                }
+                Some(';') => {
+                    self.state = TokenizerState::NumericCharacterReferenceEnd;
+                }
+                _ => {
+                    tracing::warn!("HTML parse error: missing-semicolon-after-character-reference");
+                    self.reconsume();
+                    self.state = TokenizerState::NumericCharacterReferenceEnd;
+                }
+            },
+            TokenizerState::NumericCharacterReferenceEnd => {
+                let c = if self.char_ref_code == 0 {
+                    tracing::warn!("HTML parse error: null-character-reference");
+                    '\u{FFFD}'
+                } else if self.char_ref_code > 0x10FFFF {
+                    tracing::warn!("HTML parse error: character-reference-outside-unicode-range");
+                    '\u{FFFD}'
+                } else if (0xD800..=0xDFFF).contains(&self.char_ref_code) {
+                    tracing::warn!("HTML parse error: surrogate-character-reference");
+                    '\u{FFFD}'
+                } else if let Some(replacement) =
+                    entities::windows_1252_replacement(self.char_ref_code)
+                {
+                    tracing::warn!("HTML parse error: character-reference-outside-unicode-range");
+                    replacement
+                } else {
+                    // Check for noncharacter
+                    let cp = self.char_ref_code;
+                    if (0xFDD0..=0xFDEF).contains(&cp)
+                        || matches!(
+                            cp,
+                            0xFFFE
+                                | 0xFFFF
+                                | 0x1FFFE
+                                | 0x1FFFF
+                                | 0x2FFFE
+                                | 0x2FFFF
+                                | 0x3FFFE
+                                | 0x3FFFF
+                                | 0x4FFFE
+                                | 0x4FFFF
+                                | 0x5FFFE
+                                | 0x5FFFF
+                                | 0x6FFFE
+                                | 0x6FFFF
+                                | 0x7FFFE
+                                | 0x7FFFF
+                                | 0x8FFFE
+                                | 0x8FFFF
+                                | 0x9FFFE
+                                | 0x9FFFF
+                                | 0xAFFFE
+                                | 0xAFFFF
+                                | 0xBFFFE
+                                | 0xBFFFF
+                                | 0xCFFFE
+                                | 0xCFFFF
+                                | 0xDFFFE
+                                | 0xDFFFF
+                                | 0xEFFFE
+                                | 0xEFFFF
+                                | 0xFFFFE
+                                | 0xFFFFF
+                                | 0x10FFFE
+                                | 0x10FFFF
+                        )
+                    {
+                        tracing::warn!("HTML parse error: noncharacter-character-reference");
+                    }
+                    // Control character check (0x01-0x1F except 0x09,0x0A,0x0C; 0x7F-0x9F)
+                    if (cp <= 0x1F && !matches!(cp, 0x09 | 0x0A | 0x0C))
+                        || (0x7F..=0x9F).contains(&cp)
+                    {
+                        tracing::warn!("HTML parse error: control-character-reference");
+                    }
+                    char::from_u32(cp).unwrap_or('\u{FFFD}')
+                };
+                self.emit_char_ref_result(c);
+                self.state = self.return_state;
+            }
+        }
+    }
+
+    fn is_appropriate_end_tag(&self) -> bool {
+        if let Some(tag) = &self.current_tag
+            && tag.is_end_tag
+            && let Some(ref last) = self.last_start_tag_name
+        {
+            return tag.name == *last;
+        }
+        false
+    }
+
+    fn is_return_state_attr(&self) -> bool {
+        matches!(
+            self.return_state,
+            TokenizerState::AttributeValueDoubleQuoted
+                | TokenizerState::AttributeValueSingleQuoted
+                | TokenizerState::AttributeValueUnquoted
+        )
+    }
+
+    fn flush_temp_buffer(&mut self) {
+        let buf: Vec<char> = self.temp_buffer.drain(..).collect();
+        if self.is_return_state_attr() {
+            for c in buf {
+                self.push_to_attr_value(c);
+            }
+        } else {
+            for c in buf {
+                self.emit(Token::Character(c));
+            }
+        }
+    }
+
+    fn emit_char_ref_result(&mut self, c: char) {
+        if self.is_return_state_attr() {
+            self.push_to_attr_value(c);
+        } else {
+            self.emit(Token::Character(c));
         }
     }
 
@@ -1233,5 +1915,183 @@ mod tests {
         assert!(tok.next().unwrap().is_end_tag("div"));
         assert_eq!(tok.next(), Some(Token::Eof));
         assert_eq!(tok.next(), None);
+    }
+
+    // --- Step 1b: Character reference tests ---
+
+    #[test]
+    fn named_entity_amp() {
+        let tokens = tokenize("&amp;");
+        assert_eq!(tokens, vec![Token::Character('&'), Token::Eof]);
+    }
+
+    #[test]
+    fn named_entity_lt() {
+        let tokens = tokenize("&lt;");
+        assert_eq!(tokens, vec![Token::Character('<'), Token::Eof]);
+    }
+
+    #[test]
+    fn numeric_entity_decimal() {
+        let tokens = tokenize("&#60;");
+        assert_eq!(tokens, vec![Token::Character('<'), Token::Eof]);
+    }
+
+    #[test]
+    fn numeric_entity_hex() {
+        let tokens = tokenize("&#x3C;");
+        assert_eq!(tokens, vec![Token::Character('<'), Token::Eof]);
+    }
+
+    #[test]
+    fn numeric_entity_hex_uppercase() {
+        let tokens = tokenize("&#X3c;");
+        assert_eq!(tokens, vec![Token::Character('<'), Token::Eof]);
+    }
+
+    #[test]
+    fn entity_in_attribute() {
+        let tokens = tokenize(r#"<a href="?a=1&amp;b=2">"#);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::StartTag {
+                    name: "a".to_string(),
+                    attributes: vec![Attribute {
+                        name: "href".to_string(),
+                        value: "?a=1&b=2".to_string(),
+                    }],
+                    self_closing: false,
+                },
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn entity_in_text() {
+        let tokens = tokenize("a&lt;b");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Character('a'),
+                Token::Character('<'),
+                Token::Character('b'),
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn bare_ampersand() {
+        let tokens = tokenize("a&b");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Character('a'),
+                Token::Character('&'),
+                Token::Character('b'),
+                Token::Eof,
+            ]
+        );
+    }
+
+    // --- Step 1b: RCDATA tests ---
+
+    #[test]
+    fn rcdata_title() {
+        let mut tok = Tokenizer::new("<title>&amp; stuff</title>");
+        // Consume the <title> start tag
+        let start = tok.next().unwrap();
+        assert!(start.is_start_tag("title"));
+        // Switch to RCDATA as tree builder would
+        tok.set_state(TokenizerState::RcData);
+        let remaining: Vec<Token> = tok.collect();
+        // Should resolve &amp; to & in RCDATA
+        let text: String = remaining
+            .iter()
+            .filter_map(|t| match t {
+                Token::Character(c) => Some(*c),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "& stuff");
+        assert!(remaining.iter().any(|t| t.is_end_tag("title")));
+    }
+
+    // --- Step 1b: RawText tests ---
+
+    #[test]
+    fn rawtext_style() {
+        let mut tok = Tokenizer::new("<style>.a { }</style>");
+        let start = tok.next().unwrap();
+        assert!(start.is_start_tag("style"));
+        tok.set_state(TokenizerState::RawText);
+        let remaining: Vec<Token> = tok.collect();
+        let text: String = remaining
+            .iter()
+            .filter_map(|t| match t {
+                Token::Character(c) => Some(*c),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, ".a { }");
+        assert!(remaining.iter().any(|t| t.is_end_tag("style")));
+    }
+
+    // --- Step 1b: ScriptData tests ---
+
+    #[test]
+    fn script_data_basic() {
+        let mut tok = Tokenizer::new("<script>var x = 1 < 2;</script>");
+        let start = tok.next().unwrap();
+        assert!(start.is_start_tag("script"));
+        tok.set_state(TokenizerState::ScriptData);
+        let remaining: Vec<Token> = tok.collect();
+        let text: String = remaining
+            .iter()
+            .filter_map(|t| match t {
+                Token::Character(c) => Some(*c),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "var x = 1 < 2;");
+        assert!(remaining.iter().any(|t| t.is_end_tag("script")));
+    }
+
+    // --- Step 1b: State switching test ---
+
+    #[test]
+    fn set_state_switches() {
+        let mut tok = Tokenizer::new("content</textarea>");
+        tok.set_state(TokenizerState::RcData);
+        // In RCDATA, should accumulate text until </textarea> end tag
+        // (last_start_tag_name would need to be set for appropriate end tag check)
+        // Without last_start_tag_name set, end tag won't be recognized
+        let tokens: Vec<Token> = tok.collect();
+        // Should get characters since no appropriate end tag match
+        assert!(tokens.iter().any(|t| matches!(t, Token::Character(_))));
+    }
+
+    #[test]
+    fn numeric_entity_null_replacement() {
+        let tokens = tokenize("&#0;");
+        assert_eq!(tokens, vec![Token::Character('\u{FFFD}'), Token::Eof]);
+    }
+
+    #[test]
+    fn multi_codepoint_entity() {
+        // &nGt; → U+226B U+20D2
+        let tokens = tokenize("&nGt;");
+        let chars: Vec<char> = tokens
+            .iter()
+            .filter_map(|t| match t {
+                Token::Character(c) => Some(*c),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(chars.len(), 2);
+        assert_eq!(chars[0], '\u{226B}');
+        assert_eq!(chars[1], '\u{20D2}');
     }
 }
