@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
 use crate::entities;
 use crate::token::{Attribute, Token};
@@ -169,6 +169,7 @@ pub struct Tokenizer<'a> {
     current_doctype: DoctypeBuilder,
     temp_buffer: String,
     last_start_tag_name: Option<String>,
+    last_consumed: bool,
     char_ref_code: u32,
     finished: bool,
 }
@@ -187,6 +188,7 @@ impl<'a> Tokenizer<'a> {
             current_doctype: DoctypeBuilder::default(),
             temp_buffer: String::new(),
             last_start_tag_name: None,
+            last_consumed: false,
             char_ref_code: 0,
             finished: false,
         }
@@ -196,19 +198,26 @@ impl<'a> Tokenizer<'a> {
         self.state = state;
     }
 
+    pub fn set_last_start_tag(&mut self, name: &str) {
+        self.last_start_tag_name = Some(name.to_string());
+    }
+
     fn next_char(&mut self) -> Option<char> {
         if self.pos < self.chars.len() {
             let c = self.chars[self.pos];
             self.pos += 1;
+            self.last_consumed = true;
             Some(c)
         } else {
+            self.last_consumed = false;
             None
         }
     }
 
     fn reconsume(&mut self) {
-        if self.pos > 0 {
+        if self.last_consumed && self.pos > 0 {
             self.pos -= 1;
+            self.last_consumed = false;
         }
     }
 
@@ -246,7 +255,10 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn emit_current_tag(&mut self) {
-        if let Some(tag) = self.current_tag.take() {
+        if let Some(mut tag) = self.current_tag.take() {
+            // Deduplicate attributes: first occurrence wins (WHATWG spec)
+            let mut seen = HashSet::new();
+            tag.attributes.retain(|attr| seen.insert(attr.name.clone()));
             let token = tag.into_token();
             self.emit(token);
         }
@@ -639,19 +651,21 @@ impl<'a> Tokenizer<'a> {
             },
             TokenizerState::CommentLessThanSignBangDash => match self.next_char() {
                 Some('-') => self.state = TokenizerState::CommentLessThanSignBangDashDash,
-                _ => {
+                Some(_) => {
                     self.reconsume();
                     self.state = TokenizerState::CommentEndDash;
                 }
+                None => {
+                    self.state = TokenizerState::CommentEndDash;
+                }
             },
-            TokenizerState::CommentLessThanSignBangDashDash => match self.next_char() {
+            TokenizerState::CommentLessThanSignBangDashDash => match self.peek_char() {
                 Some('>') | None => {
-                    self.reconsume();
+                    // Don't consume; CommentEnd will handle it
                     self.state = TokenizerState::CommentEnd;
                 }
                 Some(_) => {
                     tracing::warn!("HTML parse error: nested-comment");
-                    self.reconsume();
                     self.state = TokenizerState::CommentEnd;
                 }
             },
@@ -816,30 +830,344 @@ impl<'a> Tokenizer<'a> {
                     }
                 }
             }
-            // Simplified doctype PUBLIC/SYSTEM handling
-            TokenizerState::AfterDoctypePublicKeyword
-            | TokenizerState::BeforeDoctypePublicIdentifier
-            | TokenizerState::DoctypePublicIdentifierDoubleQuoted
-            | TokenizerState::DoctypePublicIdentifierSingleQuoted
-            | TokenizerState::AfterDoctypePublicIdentifier
-            | TokenizerState::BetweenDoctypePublicAndSystemIdentifiers
-            | TokenizerState::AfterDoctypeSystemKeyword
-            | TokenizerState::BeforeDoctypeSystemIdentifier
-            | TokenizerState::DoctypeSystemIdentifierDoubleQuoted
-            | TokenizerState::DoctypeSystemIdentifierSingleQuoted
-            | TokenizerState::AfterDoctypeSystemIdentifier => {
-                // Consume until '>' for simplicity in Phase 2
+            TokenizerState::AfterDoctypePublicKeyword => match self.next_char() {
+                Some('\t' | '\n' | '\x0C' | ' ') => {
+                    self.state = TokenizerState::BeforeDoctypePublicIdentifier;
+                }
+                Some('"') => {
+                    tracing::warn!(
+                        "HTML parse error: missing-whitespace-after-doctype-public-keyword"
+                    );
+                    self.current_doctype.public_id = Some(String::new());
+                    self.state = TokenizerState::DoctypePublicIdentifierDoubleQuoted;
+                }
+                Some('\'') => {
+                    tracing::warn!(
+                        "HTML parse error: missing-whitespace-after-doctype-public-keyword"
+                    );
+                    self.current_doctype.public_id = Some(String::new());
+                    self.state = TokenizerState::DoctypePublicIdentifierSingleQuoted;
+                }
+                Some('>') => {
+                    tracing::warn!("HTML parse error: missing-doctype-public-identifier");
+                    self.current_doctype.force_quirks = true;
+                    self.state = TokenizerState::Data;
+                    self.emit_current_doctype();
+                }
+                None => {
+                    tracing::warn!("HTML parse error: eof-in-doctype");
+                    self.current_doctype.force_quirks = true;
+                    self.emit_current_doctype();
+                    self.emit(Token::Eof);
+                }
+                Some(_) => {
+                    tracing::warn!(
+                        "HTML parse error: missing-quote-before-doctype-public-identifier"
+                    );
+                    self.current_doctype.force_quirks = true;
+                    self.state = TokenizerState::BogusDoctype;
+                }
+            },
+            TokenizerState::BeforeDoctypePublicIdentifier => {
                 match self.next_char() {
+                    Some('\t' | '\n' | '\x0C' | ' ') => {} // ignore
+                    Some('"') => {
+                        self.current_doctype.public_id = Some(String::new());
+                        self.state = TokenizerState::DoctypePublicIdentifierDoubleQuoted;
+                    }
+                    Some('\'') => {
+                        self.current_doctype.public_id = Some(String::new());
+                        self.state = TokenizerState::DoctypePublicIdentifierSingleQuoted;
+                    }
+                    Some('>') => {
+                        tracing::warn!("HTML parse error: missing-doctype-public-identifier");
+                        self.current_doctype.force_quirks = true;
+                        self.state = TokenizerState::Data;
+                        self.emit_current_doctype();
+                    }
+                    None => {
+                        tracing::warn!("HTML parse error: eof-in-doctype");
+                        self.current_doctype.force_quirks = true;
+                        self.emit_current_doctype();
+                        self.emit(Token::Eof);
+                    }
+                    Some(_) => {
+                        tracing::warn!(
+                            "HTML parse error: missing-quote-before-doctype-public-identifier"
+                        );
+                        self.current_doctype.force_quirks = true;
+                        self.state = TokenizerState::BogusDoctype;
+                    }
+                }
+            }
+            TokenizerState::DoctypePublicIdentifierDoubleQuoted => match self.next_char() {
+                Some('"') => {
+                    self.state = TokenizerState::AfterDoctypePublicIdentifier;
+                }
+                Some('\0') => {
+                    tracing::warn!("HTML parse error: unexpected-null-character");
+                    if let Some(id) = &mut self.current_doctype.public_id {
+                        id.push('\u{FFFD}');
+                    }
+                }
+                Some('>') => {
+                    tracing::warn!("HTML parse error: abrupt-doctype-public-identifier");
+                    self.current_doctype.force_quirks = true;
+                    self.state = TokenizerState::Data;
+                    self.emit_current_doctype();
+                }
+                None => {
+                    tracing::warn!("HTML parse error: eof-in-doctype");
+                    self.current_doctype.force_quirks = true;
+                    self.emit_current_doctype();
+                    self.emit(Token::Eof);
+                }
+                Some(c) => {
+                    if let Some(id) = &mut self.current_doctype.public_id {
+                        id.push(c);
+                    }
+                }
+            },
+            TokenizerState::DoctypePublicIdentifierSingleQuoted => match self.next_char() {
+                Some('\'') => {
+                    self.state = TokenizerState::AfterDoctypePublicIdentifier;
+                }
+                Some('\0') => {
+                    tracing::warn!("HTML parse error: unexpected-null-character");
+                    if let Some(id) = &mut self.current_doctype.public_id {
+                        id.push('\u{FFFD}');
+                    }
+                }
+                Some('>') => {
+                    tracing::warn!("HTML parse error: abrupt-doctype-public-identifier");
+                    self.current_doctype.force_quirks = true;
+                    self.state = TokenizerState::Data;
+                    self.emit_current_doctype();
+                }
+                None => {
+                    tracing::warn!("HTML parse error: eof-in-doctype");
+                    self.current_doctype.force_quirks = true;
+                    self.emit_current_doctype();
+                    self.emit(Token::Eof);
+                }
+                Some(c) => {
+                    if let Some(id) = &mut self.current_doctype.public_id {
+                        id.push(c);
+                    }
+                }
+            },
+            TokenizerState::AfterDoctypePublicIdentifier => match self.next_char() {
+                Some('\t' | '\n' | '\x0C' | ' ') => {
+                    self.state = TokenizerState::BetweenDoctypePublicAndSystemIdentifiers;
+                }
+                Some('>') => {
+                    self.state = TokenizerState::Data;
+                    self.emit_current_doctype();
+                }
+                Some('"') => {
+                    tracing::warn!(
+                        "HTML parse error: missing-whitespace-between-doctype-public-and-system-identifiers"
+                    );
+                    self.current_doctype.system_id = Some(String::new());
+                    self.state = TokenizerState::DoctypeSystemIdentifierDoubleQuoted;
+                }
+                Some('\'') => {
+                    tracing::warn!(
+                        "HTML parse error: missing-whitespace-between-doctype-public-and-system-identifiers"
+                    );
+                    self.current_doctype.system_id = Some(String::new());
+                    self.state = TokenizerState::DoctypeSystemIdentifierSingleQuoted;
+                }
+                None => {
+                    tracing::warn!("HTML parse error: eof-in-doctype");
+                    self.current_doctype.force_quirks = true;
+                    self.emit_current_doctype();
+                    self.emit(Token::Eof);
+                }
+                Some(_) => {
+                    tracing::warn!(
+                        "HTML parse error: missing-quote-before-doctype-system-identifier"
+                    );
+                    self.current_doctype.force_quirks = true;
+                    self.state = TokenizerState::BogusDoctype;
+                }
+            },
+            TokenizerState::BetweenDoctypePublicAndSystemIdentifiers => {
+                match self.next_char() {
+                    Some('\t' | '\n' | '\x0C' | ' ') => {} // ignore
+                    Some('>') => {
+                        self.state = TokenizerState::Data;
+                        self.emit_current_doctype();
+                    }
+                    Some('"') => {
+                        self.current_doctype.system_id = Some(String::new());
+                        self.state = TokenizerState::DoctypeSystemIdentifierDoubleQuoted;
+                    }
+                    Some('\'') => {
+                        self.current_doctype.system_id = Some(String::new());
+                        self.state = TokenizerState::DoctypeSystemIdentifierSingleQuoted;
+                    }
+                    None => {
+                        tracing::warn!("HTML parse error: eof-in-doctype");
+                        self.current_doctype.force_quirks = true;
+                        self.emit_current_doctype();
+                        self.emit(Token::Eof);
+                    }
+                    Some(_) => {
+                        tracing::warn!(
+                            "HTML parse error: missing-quote-before-doctype-system-identifier"
+                        );
+                        self.current_doctype.force_quirks = true;
+                        self.state = TokenizerState::BogusDoctype;
+                    }
+                }
+            }
+            TokenizerState::AfterDoctypeSystemKeyword => match self.next_char() {
+                Some('\t' | '\n' | '\x0C' | ' ') => {
+                    self.state = TokenizerState::BeforeDoctypeSystemIdentifier;
+                }
+                Some('"') => {
+                    tracing::warn!(
+                        "HTML parse error: missing-whitespace-after-doctype-system-keyword"
+                    );
+                    self.current_doctype.system_id = Some(String::new());
+                    self.state = TokenizerState::DoctypeSystemIdentifierDoubleQuoted;
+                }
+                Some('\'') => {
+                    tracing::warn!(
+                        "HTML parse error: missing-whitespace-after-doctype-system-keyword"
+                    );
+                    self.current_doctype.system_id = Some(String::new());
+                    self.state = TokenizerState::DoctypeSystemIdentifierSingleQuoted;
+                }
+                Some('>') => {
+                    tracing::warn!("HTML parse error: missing-doctype-system-identifier");
+                    self.current_doctype.force_quirks = true;
+                    self.state = TokenizerState::Data;
+                    self.emit_current_doctype();
+                }
+                None => {
+                    tracing::warn!("HTML parse error: eof-in-doctype");
+                    self.current_doctype.force_quirks = true;
+                    self.emit_current_doctype();
+                    self.emit(Token::Eof);
+                }
+                Some(_) => {
+                    tracing::warn!(
+                        "HTML parse error: missing-quote-before-doctype-system-identifier"
+                    );
+                    self.current_doctype.force_quirks = true;
+                    self.state = TokenizerState::BogusDoctype;
+                }
+            },
+            TokenizerState::BeforeDoctypeSystemIdentifier => {
+                match self.next_char() {
+                    Some('\t' | '\n' | '\x0C' | ' ') => {} // ignore
+                    Some('"') => {
+                        self.current_doctype.system_id = Some(String::new());
+                        self.state = TokenizerState::DoctypeSystemIdentifierDoubleQuoted;
+                    }
+                    Some('\'') => {
+                        self.current_doctype.system_id = Some(String::new());
+                        self.state = TokenizerState::DoctypeSystemIdentifierSingleQuoted;
+                    }
+                    Some('>') => {
+                        tracing::warn!("HTML parse error: missing-doctype-system-identifier");
+                        self.current_doctype.force_quirks = true;
+                        self.state = TokenizerState::Data;
+                        self.emit_current_doctype();
+                    }
+                    None => {
+                        tracing::warn!("HTML parse error: eof-in-doctype");
+                        self.current_doctype.force_quirks = true;
+                        self.emit_current_doctype();
+                        self.emit(Token::Eof);
+                    }
+                    Some(_) => {
+                        tracing::warn!(
+                            "HTML parse error: missing-quote-before-doctype-system-identifier"
+                        );
+                        self.current_doctype.force_quirks = true;
+                        self.state = TokenizerState::BogusDoctype;
+                    }
+                }
+            }
+            TokenizerState::DoctypeSystemIdentifierDoubleQuoted => match self.next_char() {
+                Some('"') => {
+                    self.state = TokenizerState::AfterDoctypeSystemIdentifier;
+                }
+                Some('\0') => {
+                    tracing::warn!("HTML parse error: unexpected-null-character");
+                    if let Some(id) = &mut self.current_doctype.system_id {
+                        id.push('\u{FFFD}');
+                    }
+                }
+                Some('>') => {
+                    tracing::warn!("HTML parse error: abrupt-doctype-system-identifier");
+                    self.current_doctype.force_quirks = true;
+                    self.state = TokenizerState::Data;
+                    self.emit_current_doctype();
+                }
+                None => {
+                    tracing::warn!("HTML parse error: eof-in-doctype");
+                    self.current_doctype.force_quirks = true;
+                    self.emit_current_doctype();
+                    self.emit(Token::Eof);
+                }
+                Some(c) => {
+                    if let Some(id) = &mut self.current_doctype.system_id {
+                        id.push(c);
+                    }
+                }
+            },
+            TokenizerState::DoctypeSystemIdentifierSingleQuoted => match self.next_char() {
+                Some('\'') => {
+                    self.state = TokenizerState::AfterDoctypeSystemIdentifier;
+                }
+                Some('\0') => {
+                    tracing::warn!("HTML parse error: unexpected-null-character");
+                    if let Some(id) = &mut self.current_doctype.system_id {
+                        id.push('\u{FFFD}');
+                    }
+                }
+                Some('>') => {
+                    tracing::warn!("HTML parse error: abrupt-doctype-system-identifier");
+                    self.current_doctype.force_quirks = true;
+                    self.state = TokenizerState::Data;
+                    self.emit_current_doctype();
+                }
+                None => {
+                    tracing::warn!("HTML parse error: eof-in-doctype");
+                    self.current_doctype.force_quirks = true;
+                    self.emit_current_doctype();
+                    self.emit(Token::Eof);
+                }
+                Some(c) => {
+                    if let Some(id) = &mut self.current_doctype.system_id {
+                        id.push(c);
+                    }
+                }
+            },
+            TokenizerState::AfterDoctypeSystemIdentifier => {
+                match self.next_char() {
+                    Some('\t' | '\n' | '\x0C' | ' ') => {} // ignore
                     Some('>') => {
                         self.state = TokenizerState::Data;
                         self.emit_current_doctype();
                     }
                     None => {
+                        tracing::warn!("HTML parse error: eof-in-doctype");
                         self.current_doctype.force_quirks = true;
                         self.emit_current_doctype();
                         self.emit(Token::Eof);
                     }
-                    Some(_) => {} // consume
+                    Some(_) => {
+                        tracing::warn!(
+                            "HTML parse error: unexpected-character-after-doctype-system-identifier"
+                        );
+                        // Do NOT set force_quirks per spec
+                        self.state = TokenizerState::BogusDoctype;
+                    }
                 }
             }
             TokenizerState::BogusDoctype => {
@@ -1405,20 +1733,20 @@ impl<'a> Tokenizer<'a> {
             },
             TokenizerState::NumericCharacterReference => {
                 self.char_ref_code = 0;
-                match self.next_char() {
+                match self.peek_char() {
                     Some(c @ ('x' | 'X')) => {
+                        self.pos += 1;
                         self.temp_buffer.push(c);
                         self.state = TokenizerState::HexadecimalCharacterReferenceStart;
                     }
                     _ => {
-                        self.reconsume();
+                        // Don't consume; DecimalCharacterReferenceStart will read next
                         self.state = TokenizerState::DecimalCharacterReferenceStart;
                     }
                 }
             }
-            TokenizerState::HexadecimalCharacterReferenceStart => match self.next_char() {
+            TokenizerState::HexadecimalCharacterReferenceStart => match self.peek_char() {
                 Some(c) if c.is_ascii_hexdigit() => {
-                    self.reconsume();
                     self.state = TokenizerState::HexadecimalCharacterReference;
                 }
                 _ => {
@@ -1426,13 +1754,11 @@ impl<'a> Tokenizer<'a> {
                         "HTML parse error: absence-of-digits-in-numeric-character-reference"
                     );
                     self.flush_temp_buffer();
-                    self.reconsume();
                     self.state = self.return_state;
                 }
             },
-            TokenizerState::DecimalCharacterReferenceStart => match self.next_char() {
+            TokenizerState::DecimalCharacterReferenceStart => match self.peek_char() {
                 Some(c) if c.is_ascii_digit() => {
-                    self.reconsume();
                     self.state = TokenizerState::DecimalCharacterReference;
                 }
                 _ => {
@@ -1440,7 +1766,6 @@ impl<'a> Tokenizer<'a> {
                         "HTML parse error: absence-of-digits-in-numeric-character-reference"
                     );
                     self.flush_temp_buffer();
-                    self.reconsume();
                     self.state = self.return_state;
                 }
             },
@@ -1614,6 +1939,7 @@ impl<'a> Iterator for Tokenizer<'a> {
             return None;
         }
 
+        let mut steps = 0;
         loop {
             if let Some(token) = self.pending_tokens.pop_front() {
                 if token == Token::Eof {
@@ -1622,6 +1948,12 @@ impl<'a> Iterator for Tokenizer<'a> {
                 return Some(token);
             }
             self.step();
+            steps += 1;
+            if steps > 200 {
+                tracing::error!("tokenizer infinite loop detected, emitting EOF");
+                self.finished = true;
+                return Some(Token::Eof);
+            }
         }
     }
 }
