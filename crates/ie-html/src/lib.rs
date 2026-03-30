@@ -4,6 +4,7 @@
 //! Targets latest spec only — no quirks mode, no legacy element support.
 
 pub mod entities;
+pub mod formatting;
 pub mod insertion_mode;
 pub mod token;
 pub mod tokenizer;

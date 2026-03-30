@@ -1,5 +1,6 @@
 use ie_dom::{Document, NodeId, NodeKind};
 
+use crate::formatting::FormattingEntry;
 use crate::insertion_mode::InsertionMode;
 use crate::token::{Attribute, Token};
 use crate::tokenizer::{Tokenizer, TokenizerState};
@@ -30,6 +31,7 @@ struct TreeBuilder<'a> {
     mode: InsertionMode,
     original_mode: Option<InsertionMode>,
     open_elements: Vec<NodeId>,
+    active_formatting: Vec<FormattingEntry>,
     head_pointer: Option<NodeId>,
     form_pointer: Option<NodeId>,
     frameset_ok: bool,
@@ -48,6 +50,7 @@ impl<'a> TreeBuilder<'a> {
             mode: InsertionMode::Initial,
             original_mode: None,
             open_elements: Vec::new(),
+            active_formatting: Vec::new(),
             head_pointer: None,
             form_pointer: None,
             frameset_ok: true,
@@ -295,6 +298,343 @@ impl<'a> TreeBuilder<'a> {
         self.tokenizer.set_last_start_tag(name);
         self.original_mode = Some(self.mode);
         self.mode = InsertionMode::Text;
+    }
+
+    // --- Active formatting elements ---
+
+    /// Push a formatting element entry (Noah's Ark clause: max 3 identical before last marker)
+    fn push_active_formatting(
+        &mut self,
+        node_id: NodeId,
+        tag_name: &str,
+        attributes: &[Attribute],
+    ) {
+        let mut count = 0;
+        let mut earliest_idx = None;
+        for (i, entry) in self.active_formatting.iter().enumerate().rev() {
+            match entry {
+                FormattingEntry::Marker => break,
+                FormattingEntry::Element {
+                    tag_name: t,
+                    attributes: a,
+                    ..
+                } => {
+                    if t == tag_name && a == attributes {
+                        count += 1;
+                        earliest_idx = Some(i);
+                    }
+                }
+            }
+        }
+        if count >= 3
+            && let Some(idx) = earliest_idx
+        {
+            self.active_formatting.remove(idx);
+        }
+        self.active_formatting.push(FormattingEntry::Element {
+            node_id,
+            tag_name: tag_name.to_string(),
+            attributes: attributes.to_vec(),
+        });
+    }
+
+    /// Reconstruct active formatting elements (WHATWG 13.2.4.3)
+    fn reconstruct_active_formatting(&mut self) {
+        if self.active_formatting.is_empty() {
+            return;
+        }
+        if let Some(last) = self.active_formatting.last() {
+            if last.is_marker() {
+                return;
+            }
+            if let Some(node_id) = last.node_id()
+                && self.open_elements.contains(&node_id)
+            {
+                return;
+            }
+        }
+
+        let mut idx = self.active_formatting.len() - 1;
+        loop {
+            if idx == 0 {
+                break;
+            }
+            idx -= 1;
+            let entry = &self.active_formatting[idx];
+            if entry.is_marker() {
+                idx += 1;
+                break;
+            }
+            if let Some(node_id) = entry.node_id()
+                && self.open_elements.contains(&node_id)
+            {
+                idx += 1;
+                break;
+            }
+        }
+
+        while idx < self.active_formatting.len() {
+            let (tag_name, attributes) = match &self.active_formatting[idx] {
+                FormattingEntry::Element {
+                    tag_name,
+                    attributes,
+                    ..
+                } => (tag_name.clone(), attributes.clone()),
+                FormattingEntry::Marker => {
+                    idx += 1;
+                    continue;
+                }
+            };
+            let attrs: Vec<(String, String)> = attributes
+                .iter()
+                .map(|a| (a.name.clone(), a.value.clone()))
+                .collect();
+            let new_id = self.insert_element(&tag_name, &attrs);
+            self.active_formatting[idx] = FormattingEntry::Element {
+                node_id: new_id,
+                tag_name,
+                attributes,
+            };
+            idx += 1;
+        }
+    }
+
+    /// Clear active formatting elements to the last marker
+    #[allow(dead_code)]
+    fn clear_active_formatting_to_marker(&mut self) {
+        while let Some(entry) = self.active_formatting.pop() {
+            if entry.is_marker() {
+                break;
+            }
+        }
+    }
+
+    /// Remove a node from active formatting by node_id
+    #[allow(dead_code)]
+    fn remove_from_active_formatting(&mut self, node_id: NodeId) {
+        self.active_formatting
+            .retain(|e| e.node_id() != Some(node_id));
+    }
+
+    /// The adoption agency algorithm (WHATWG 13.2.6.4.7)
+    fn run_adoption_agency(&mut self, tag_name: &str) {
+        // Step 1: if current node matches and is NOT in active_formatting, just pop
+        if let Some(&current_id) = self.open_elements.last()
+            && self.element_name(current_id) == Some(tag_name)
+        {
+            let in_formatting = self
+                .active_formatting
+                .iter()
+                .any(|e| e.node_id() == Some(current_id));
+            if !in_formatting {
+                self.open_elements.pop();
+                return;
+            }
+        }
+
+        // Outer loop: 8 iterations max
+        for _ in 0..8 {
+            // Find formatting element — last in active_formatting with matching tag
+            let formatting_idx = self.active_formatting.iter().rposition(
+                |e| matches!(e, FormattingEntry::Element { tag_name: t, .. } if t == tag_name),
+            );
+            let Some(formatting_idx) = formatting_idx else {
+                self.handle_any_other_end_tag(tag_name);
+                return;
+            };
+
+            let formatting_node_id = match &self.active_formatting[formatting_idx] {
+                FormattingEntry::Element { node_id, .. } => *node_id,
+                _ => return,
+            };
+
+            // If formatting element not in open_elements
+            let stack_idx = self
+                .open_elements
+                .iter()
+                .rposition(|&id| id == formatting_node_id);
+            let Some(stack_idx) = stack_idx else {
+                self.parse_error("formatting element not in open elements");
+                self.active_formatting.remove(formatting_idx);
+                return;
+            };
+
+            // If formatting element not in scope
+            if !self.has_element_in_scope(tag_name) {
+                self.parse_error("formatting element not in scope");
+                return;
+            }
+
+            // If formatting element is not the current node
+            if self.open_elements.last() != Some(&formatting_node_id) {
+                self.parse_error("formatting element is not current node");
+            }
+
+            // Find furthest block — first special element after formatting element in stack
+            let furthest_block_idx = self.open_elements[stack_idx + 1..]
+                .iter()
+                .position(|&id| self.element_name(id).is_some_and(is_special_element))
+                .map(|i| i + stack_idx + 1);
+
+            let Some(furthest_block_idx) = furthest_block_idx else {
+                // No furthest block: pop up to and including formatting element
+                while self.open_elements.len() > stack_idx {
+                    self.open_elements.pop();
+                }
+                self.active_formatting.remove(formatting_idx);
+                return;
+            };
+
+            let furthest_block_id = self.open_elements[furthest_block_idx];
+            let common_ancestor_id = self.open_elements[stack_idx.saturating_sub(1)];
+
+            let mut bookmark = formatting_idx;
+            let mut node_idx = furthest_block_idx;
+            let mut last_node_id = furthest_block_id;
+
+            // Inner loop
+            for inner_count in 1..=3 {
+                node_idx -= 1;
+                let node_id = self.open_elements[node_idx];
+
+                if node_id == formatting_node_id {
+                    break;
+                }
+
+                let af_idx = self
+                    .active_formatting
+                    .iter()
+                    .position(|e| e.node_id() == Some(node_id));
+
+                if inner_count > 3
+                    && let Some(af_idx) = af_idx
+                {
+                    self.active_formatting.remove(af_idx);
+                    if af_idx < bookmark {
+                        bookmark -= 1;
+                    }
+                    self.open_elements.remove(node_idx);
+                    continue;
+                }
+
+                // If node is NOT in active_formatting, remove from open_elements
+                let Some(af_idx) = af_idx else {
+                    self.open_elements.remove(node_idx);
+                    continue;
+                };
+
+                // Create replacement element
+                let (tag, attrs) = match &self.active_formatting[af_idx] {
+                    FormattingEntry::Element {
+                        tag_name,
+                        attributes,
+                        ..
+                    } => (tag_name.clone(), attributes.clone()),
+                    _ => continue,
+                };
+                let attr_pairs: Vec<(String, String)> = attrs
+                    .iter()
+                    .map(|a| (a.name.clone(), a.value.clone()))
+                    .collect();
+                let new_id = self.doc.create_element(&tag);
+                for (name, value) in &attr_pairs {
+                    self.doc.set_attribute(new_id, name, value);
+                }
+                // Reparent node's children to new_id
+                if let Some(node) = self.doc.node(node_id) {
+                    let children: Vec<NodeId> = node.children.clone();
+                    for &child in &children {
+                        let _ = self.doc.remove_child(node_id, child);
+                        let _ = self.doc.append_child(new_id, child);
+                    }
+                }
+                // Replace node in its parent
+                if let Some(parent_id) = self.doc.parent(node_id) {
+                    let _ = self.doc.remove_child(parent_id, node_id);
+                    let _ = self.doc.append_child(parent_id, new_id);
+                }
+
+                self.active_formatting[af_idx] = FormattingEntry::Element {
+                    node_id: new_id,
+                    tag_name: tag,
+                    attributes: attrs,
+                };
+                self.open_elements[node_idx] = new_id;
+
+                if last_node_id == furthest_block_id {
+                    bookmark = af_idx + 1;
+                }
+
+                // Reparent last_node to new_id
+                if let Some(parent_id) = self.doc.parent(last_node_id) {
+                    let _ = self.doc.remove_child(parent_id, last_node_id);
+                }
+                let _ = self.doc.append_child(new_id, last_node_id);
+                last_node_id = new_id;
+            }
+
+            // Insert last_node into common ancestor
+            if let Some(parent_id) = self.doc.parent(last_node_id) {
+                let _ = self.doc.remove_child(parent_id, last_node_id);
+            }
+            let _ = self.doc.append_child(common_ancestor_id, last_node_id);
+
+            // Create new element for the formatting element
+            let fmt_idx = formatting_idx.min(self.active_formatting.len().saturating_sub(1));
+            let (tag, attrs) = match &self.active_formatting[fmt_idx] {
+                FormattingEntry::Element {
+                    tag_name,
+                    attributes,
+                    ..
+                } => (tag_name.clone(), attributes.clone()),
+                _ => return,
+            };
+            let new_formatting_id = self.doc.create_element(&tag);
+            for a in &attrs {
+                self.doc.set_attribute(new_formatting_id, &a.name, &a.value);
+            }
+
+            // Take all children of furthest block and append to new formatting element
+            if let Some(fb_node) = self.doc.node(furthest_block_id) {
+                let children: Vec<NodeId> = fb_node.children.clone();
+                for &child in &children {
+                    let _ = self.doc.remove_child(furthest_block_id, child);
+                    let _ = self.doc.append_child(new_formatting_id, child);
+                }
+            }
+
+            // Append new formatting element to furthest block
+            let _ = self.doc.append_child(furthest_block_id, new_formatting_id);
+
+            // Remove old formatting entry, insert new one at bookmark
+            let old_fmt_idx = self
+                .active_formatting
+                .iter()
+                .position(|e| e.node_id() == Some(formatting_node_id));
+            if let Some(old_idx) = old_fmt_idx {
+                self.active_formatting.remove(old_idx);
+                if old_idx < bookmark {
+                    bookmark -= 1;
+                }
+            }
+            let new_entry = FormattingEntry::Element {
+                node_id: new_formatting_id,
+                tag_name: tag,
+                attributes: attrs,
+            };
+            let insert_pos = bookmark.min(self.active_formatting.len());
+            self.active_formatting.insert(insert_pos, new_entry);
+
+            // Update open_elements
+            self.open_elements.retain(|&id| id != formatting_node_id);
+            if let Some(fb_pos) = self
+                .open_elements
+                .iter()
+                .position(|&id| id == furthest_block_id)
+            {
+                self.open_elements.insert(fb_pos + 1, new_formatting_id);
+            }
+        }
     }
 
     // --- Insertion mode handlers ---
@@ -679,6 +1019,7 @@ impl<'a> TreeBuilder<'a> {
                 self.insert_character(c);
             }
             Token::Character(c) => {
+                self.reconstruct_active_formatting();
                 self.insert_character(c);
                 self.frameset_ok = false;
             }
@@ -858,25 +1199,51 @@ impl<'a> TreeBuilder<'a> {
                 ref name,
                 ref attributes,
                 ..
-            } if is_formatting_element(name) => {
-                // Simplified: no adoption agency yet
-                let attrs = Self::attrs_from_token(attributes);
-                let tag = name.clone();
-                self.insert_element(&tag, &attrs);
-            }
-            Token::EndTag { ref name } if is_formatting_element(name) => {
-                // Simplified: pop until matching element
-                let tag = name.clone();
-                let mut found = false;
-                for &id in self.open_elements.iter().rev() {
-                    if self.element_name(id) == Some(&tag) {
-                        found = true;
-                        break;
+            } if name == "a" => {
+                // Special case: <a> inside <a> — run adoption agency first
+                let has_active_a = self.active_formatting.iter().rev().any(|e| {
+                    if e.is_marker() {
+                        return false;
+                    }
+                    e.tag_name() == Some("a")
+                });
+                if has_active_a {
+                    self.parse_error("nested a element");
+                    self.run_adoption_agency("a");
+                    // Remove from active_formatting and open_elements if still present
+                    if let Some(pos) = self
+                        .active_formatting
+                        .iter()
+                        .position(|e| e.tag_name() == Some("a"))
+                    {
+                        let old_id = self.active_formatting[pos].node_id();
+                        self.active_formatting.remove(pos);
+                        if let Some(old_id) = old_id {
+                            self.open_elements.retain(|&id| id != old_id);
+                        }
                     }
                 }
-                if found {
-                    self.pop_until(&tag);
-                }
+                self.reconstruct_active_formatting();
+                let attrs = Self::attrs_from_token(attributes);
+                let token_attrs = attributes.clone();
+                let id = self.insert_element("a", &attrs);
+                self.push_active_formatting(id, "a", &token_attrs);
+            }
+            Token::StartTag {
+                ref name,
+                ref attributes,
+                ..
+            } if is_formatting_element(name) => {
+                self.reconstruct_active_formatting();
+                let attrs = Self::attrs_from_token(attributes);
+                let tag = name.clone();
+                let token_attrs = attributes.clone();
+                let id = self.insert_element(&tag, &attrs);
+                self.push_active_formatting(id, &tag, &token_attrs);
+            }
+            Token::EndTag { ref name } if is_formatting_element(name) => {
+                let tag = name.clone();
+                self.run_adoption_agency(&tag);
             }
             Token::StartTag {
                 ref name,
@@ -884,6 +1251,7 @@ impl<'a> TreeBuilder<'a> {
                 ..
             } => {
                 // Any other start tag
+                self.reconstruct_active_formatting();
                 let attrs = Self::attrs_from_token(attributes);
                 let tag = name.clone();
                 self.insert_element(&tag, &attrs);
@@ -1355,5 +1723,63 @@ mod tests {
         let title_id = find_element(&result, "title").unwrap();
         let title_children = child_names(&result, title_id);
         assert_eq!(title_children, vec!["#text:a < b"]);
+    }
+
+    fn first_child_element(doc: &Document, parent: NodeId, name: &str) -> Option<NodeId> {
+        doc.node(parent)?
+            .children
+            .iter()
+            .find(|&&id| doc.node(id).and_then(|n| n.element_name()) == Some(name))
+            .copied()
+    }
+
+    fn assert_has_text_child(doc: &Document, parent: NodeId, expected: &str) {
+        let node = doc.node(parent).unwrap();
+        let has_text = node
+            .children
+            .iter()
+            .any(|&id| matches!(doc.node(id), Some(n) if n.text_content() == Some(expected)));
+        assert!(has_text, "expected text child '{expected}' in element");
+    }
+
+    #[test]
+    fn properly_nested_formatting() {
+        // <b><i>text</i></b> -> body > b > i > "text"
+        let result = parse("<b><i>text</i></b>");
+        let body = find_element(&result, "body").unwrap();
+        let b = first_child_element(&result.document, body, "b").unwrap();
+        let i = first_child_element(&result.document, b, "i").unwrap();
+        assert_has_text_child(&result.document, i, "text");
+    }
+
+    #[test]
+    fn misnested_formatting() {
+        // <p><b>bold<i>both</b>italic</i></p>
+        // The adoption agency should restructure the tree
+        let result = parse("<p><b>bold<i>both</b>italic</i></p>");
+        let body = find_element(&result, "body").unwrap();
+        let p = first_child_element(&result.document, body, "p").unwrap();
+        let p_node = result.document.node(p).unwrap();
+        assert!(
+            p_node.children.len() >= 2,
+            "p should have restructured children, got: {:?}",
+            child_names(&result, p)
+        );
+    }
+
+    #[test]
+    fn a_inside_a() {
+        // <a href="1">first<a href="2">second</a>
+        // First <a> should be closed by adoption agency before second <a>
+        let result = parse("<a href=\"1\">first<a href=\"2\">second</a>");
+        let body = find_element(&result, "body").unwrap();
+        let body_node = result.document.node(body).unwrap();
+        let a_elements: Vec<NodeId> = body_node
+            .children
+            .iter()
+            .filter(|&&id| result.document.node(id).and_then(|n| n.element_name()) == Some("a"))
+            .copied()
+            .collect();
+        assert_eq!(a_elements.len(), 2, "should have 2 <a> elements");
     }
 }
