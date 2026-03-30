@@ -5,6 +5,7 @@
 
 pub mod cascade;
 pub mod parser;
+pub mod resolve;
 pub mod selector;
 pub mod style;
 pub mod tokenizer;
@@ -12,6 +13,7 @@ pub mod values;
 
 pub use cascade::cascade;
 pub use parser::{Declaration, Rule, Stylesheet, parse_declarations, parse_stylesheet};
+pub use resolve::{ResolvedStyle, ViewportSize, resolve_styles};
 pub use selector::{
     Selector, Specificity, matches as selector_matches, parse_selector, parse_selector_list,
     specificity,
