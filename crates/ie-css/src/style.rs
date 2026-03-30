@@ -1,50 +1,57 @@
-use crate::selector::Selector;
+use crate::values::{CssColor, CssValue, PropertyId};
 
-pub struct Stylesheet {
-    pub rules: Vec<Rule>,
-}
-
-pub struct Rule {
-    pub selectors: Vec<Selector>,
-    pub declarations: Vec<Declaration>,
-}
-
-pub struct Declaration {
-    pub property: String,
-    pub value: Value,
-}
-
+/// Computed style for a DOM element.
+/// Will be expanded when style resolution is wired up.
 #[derive(Debug, Clone)]
-pub enum Value {
-    Keyword(String),
-    Length(f32, Unit),
-    Color(Color),
-}
-
-#[derive(Debug, Clone)]
-pub enum Unit {
-    Px,
-    Em,
-    Rem,
-    Percent,
-    Vw,
-    Vh,
-}
-
-#[derive(Debug, Clone)]
-pub struct Color {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
-    pub a: u8,
-}
-
-#[derive(Debug, Clone, Default)]
 pub struct ComputedStyle {
     pub display: Display,
+    pub color: CssColor,
+    pub background_color: CssColor,
 }
 
-#[derive(Debug, Clone, Default)]
+impl Default for ComputedStyle {
+    fn default() -> Self {
+        Self {
+            display: Display::default(),
+            color: CssColor::rgb(0, 0, 0),
+            background_color: CssColor::transparent(),
+        }
+    }
+}
+
+impl ComputedStyle {
+    /// Apply a single declaration to this computed style
+    pub fn apply(&mut self, property: PropertyId, value: &CssValue) {
+        match property {
+            PropertyId::Display => {
+                if let CssValue::Keyword(kw) = value {
+                    self.display = match kw.as_str() {
+                        "block" => Display::Block,
+                        "inline" => Display::Inline,
+                        "flex" => Display::Flex,
+                        "grid" => Display::Grid,
+                        _ => return,
+                    };
+                } else if matches!(value, CssValue::None) {
+                    self.display = Display::None;
+                }
+            }
+            PropertyId::Color => {
+                if let CssValue::Color(c) = value {
+                    self.color = *c;
+                }
+            }
+            PropertyId::BackgroundColor => {
+                if let CssValue::Color(c) = value {
+                    self.background_color = *c;
+                }
+            }
+            _ => {} // Other properties handled when layout is wired up
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum Display {
     #[default]
     Block,

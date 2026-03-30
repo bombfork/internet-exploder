@@ -7,7 +7,9 @@ pub mod parser;
 pub mod selector;
 pub mod style;
 pub mod tokenizer;
+pub mod values;
 
-pub use parser::parse_stylesheet;
+pub use parser::{Declaration, Rule, Stylesheet, parse_declarations, parse_stylesheet};
 pub use style::ComputedStyle;
 pub use tokenizer::{CssToken, CssTokenizer};
+pub use values::{CssColor, CssValue, LengthUnit, PropertyId};
