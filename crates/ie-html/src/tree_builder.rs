@@ -11,6 +11,9 @@ pub struct ParseResult {
     pub errors: Vec<String>,
     pub style_elements: Vec<String>,
     pub link_stylesheets: Vec<String>,
+    pub doctype_name: Option<String>,
+    pub doctype_public_id: Option<String>,
+    pub doctype_system_id: Option<String>,
 }
 
 /// Top-level parse function. HTML parsing never fails — errors are collected.
@@ -22,6 +25,9 @@ pub fn parse(html: &str) -> ParseResult {
         errors: tb.errors,
         style_elements: tb.style_elements,
         link_stylesheets: tb.link_stylesheets,
+        doctype_name: tb.doctype_name,
+        doctype_public_id: tb.doctype_public_id,
+        doctype_system_id: tb.doctype_system_id,
     }
 }
 
@@ -41,6 +47,10 @@ struct TreeBuilder<'a> {
     style_elements: Vec<String>,
     link_stylesheets: Vec<String>,
     pending_text: String,
+    reprocess_depth: u32,
+    doctype_name: Option<String>,
+    doctype_public_id: Option<String>,
+    doctype_system_id: Option<String>,
     done: bool,
 }
 
@@ -62,6 +72,10 @@ impl<'a> TreeBuilder<'a> {
             style_elements: Vec::new(),
             link_stylesheets: Vec::new(),
             pending_text: String::new(),
+            reprocess_depth: 0,
+            doctype_name: None,
+            doctype_public_id: None,
+            doctype_system_id: None,
             done: false,
         }
     }
@@ -80,6 +94,12 @@ impl<'a> TreeBuilder<'a> {
     }
 
     fn process_token(&mut self, token: Token) {
+        self.reprocess_depth += 1;
+        if self.reprocess_depth > 20 {
+            // Prevent infinite recursion from reprocessing loops
+            self.reprocess_depth -= 1;
+            return;
+        }
         match self.mode {
             InsertionMode::Initial => self.handle_initial(token),
             InsertionMode::BeforeHtml => self.handle_before_html(token),
@@ -105,6 +125,7 @@ impl<'a> TreeBuilder<'a> {
             InsertionMode::AfterAfterFrameset => self.handle_in_body(token),
             InsertionMode::AfterFrameset => self.handle_in_body(token),
         }
+        self.reprocess_depth -= 1;
     }
 
     // --- Helpers ---
@@ -823,8 +844,16 @@ impl<'a> TreeBuilder<'a> {
             Token::Comment(ref data) => {
                 self.insert_comment_at(data, self.doc.root);
             }
-            Token::Doctype { .. } => {
-                // Accept doctype, always no-quirks mode
+            Token::Doctype {
+                name,
+                public_id,
+                system_id,
+                ..
+            } => {
+                self.doctype_name = name;
+                self.doctype_public_id = public_id;
+                self.doctype_system_id = system_id;
+                self.mode = InsertionMode::BeforeHtml;
             }
             _ => {
                 self.parse_error("unexpected token in Initial mode");
