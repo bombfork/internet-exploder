@@ -15,6 +15,11 @@ pub struct Node {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum NodeKind {
     Document,
+    Doctype {
+        name: String,
+        public_id: Option<String>,
+        system_id: Option<String>,
+    },
     Element(String),
     Text(String),
     Comment(String),

@@ -35,6 +35,7 @@ fn print_tree(doc: &ie_dom::Document, id: ie_dom::NodeId, indent: usize) {
     let prefix = "| ".repeat(indent);
     match &node.kind {
         ie_dom::NodeKind::Document => println!("{prefix}#document"),
+        ie_dom::NodeKind::Doctype { name, .. } => println!("{prefix}<!DOCTYPE {name}>"),
         ie_dom::NodeKind::Element(name) => {
             let attrs: Vec<String> = node
                 .attributes

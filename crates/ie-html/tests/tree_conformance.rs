@@ -135,26 +135,8 @@ fn parse_test_file(path: &std::path::Path) -> Vec<TreeTest> {
 }
 
 /// Serialize a DOM document to the html5lib tree test format.
-fn serialize_tree_with_doctype(result: &ie_html::ParseResult) -> String {
+fn serialize_tree(doc: &Document) -> String {
     let mut output = String::new();
-    // Output doctype if present
-    if result.doctype_name.is_some()
-        || result.doctype_public_id.is_some()
-        || result.doctype_system_id.is_some()
-    {
-        let name = result.doctype_name.as_deref().unwrap_or("");
-        let public = result.doctype_public_id.as_deref();
-        let system = result.doctype_system_id.as_deref();
-        match (public, system) {
-            (Some(p), Some(s)) => {
-                output.push_str(&format!("| <!DOCTYPE {name} \"{p}\" \"{s}\">\n"))
-            }
-            (Some(p), None) => output.push_str(&format!("| <!DOCTYPE {name} \"{p}\" \"\">\n")),
-            (None, Some(s)) => output.push_str(&format!("| <!DOCTYPE {name} \"\" \"{s}\">\n")),
-            (None, None) => output.push_str(&format!("| <!DOCTYPE {name}>\n")),
-        }
-    }
-    let doc = &result.document;
     let root = doc.root;
     let root_node = doc.node(root).unwrap();
     for &child_id in &root_node.children {
@@ -173,6 +155,22 @@ fn serialize_node(doc: &Document, id: NodeId, depth: usize, output: &mut String)
 
     match &node.kind {
         NodeKind::Document => {}
+        NodeKind::Doctype {
+            name,
+            public_id,
+            system_id,
+        } => match (public_id.as_deref(), system_id.as_deref()) {
+            (Some(p), Some(s)) => {
+                output.push_str(&format!("| {indent}<!DOCTYPE {name} \"{p}\" \"{s}\">\n"))
+            }
+            (Some(p), None) => {
+                output.push_str(&format!("| {indent}<!DOCTYPE {name} \"{p}\" \"\">\n"))
+            }
+            (None, Some(s)) => {
+                output.push_str(&format!("| {indent}<!DOCTYPE {name} \"\" \"{s}\">\n"))
+            }
+            (None, None) => output.push_str(&format!("| {indent}<!DOCTYPE {name}>\n")),
+        },
         NodeKind::Element(name) => {
             output.push_str(&format!("| {indent}<{name}>\n"));
             // Sort attributes alphabetically for consistent comparison
@@ -214,7 +212,7 @@ fn run_test_file(filename: &str) -> (usize, usize, Vec<String>) {
         total += 1;
 
         let result = parse(&test.input);
-        let actual = serialize_tree_with_doctype(&result);
+        let actual = serialize_tree(&result.document);
 
         if actual == test.expected_tree {
             passed += 1;

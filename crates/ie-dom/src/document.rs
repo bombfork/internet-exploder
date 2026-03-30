@@ -62,6 +62,26 @@ impl Document {
         id
     }
 
+    pub fn create_doctype(
+        &mut self,
+        name: &str,
+        public_id: Option<&str>,
+        system_id: Option<&str>,
+    ) -> NodeId {
+        let id = self.nodes.len();
+        self.nodes.push(Node {
+            kind: NodeKind::Doctype {
+                name: name.to_string(),
+                public_id: public_id.map(|s| s.to_string()),
+                system_id: system_id.map(|s| s.to_string()),
+            },
+            parent: None,
+            children: Vec::new(),
+            attributes: HashMap::new(),
+        });
+        id
+    }
+
     // --- Accessors ---
 
     pub fn node(&self, id: NodeId) -> Option<&Node> {
