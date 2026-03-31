@@ -6,6 +6,7 @@
 pub mod block;
 pub mod box_generation;
 pub mod inline;
+pub mod positioned;
 pub mod text_measure;
 
 use ie_css::resolve::ResolvedStyle;
@@ -65,6 +66,7 @@ pub fn layout(
     if let Some(root) = tree.root {
         block::layout_block(root, &mut tree, styles, viewport.width, 0.0, text_measure);
     }
+    positioned::apply_positioned(&mut tree, styles, viewport);
     tree
 }
 
@@ -307,5 +309,48 @@ mod tests {
                 tb.content_rect.width
             );
         }
+    }
+
+    #[test]
+    fn position_relative_offset() {
+        let tree = layout_html_with_css(
+            "<div id='box'>content</div>",
+            "#box { position: relative; top: 10px; left: 20px; }",
+        );
+        // The box should be offset from its normal position
+        let has_offset = tree
+            .boxes
+            .iter()
+            .any(|b| b.content_rect.x >= 20.0 && b.content_rect.y >= 10.0);
+        assert!(has_offset, "relative positioned box should be offset");
+    }
+
+    #[test]
+    fn position_fixed_to_viewport() {
+        let tree = layout_html_with_css(
+            "<div id='fixed'>fixed</div>",
+            "#fixed { position: fixed; top: 0px; left: 0px; width: 100px; }",
+        );
+        let fixed = tree
+            .boxes
+            .iter()
+            .find(|b| (b.content_rect.width - 100.0).abs() < 0.1);
+        if let Some(b) = fixed {
+            assert!(
+                (b.content_rect.x).abs() < 1.0,
+                "fixed box should be at viewport left"
+            );
+            assert!(
+                (b.content_rect.y).abs() < 1.0,
+                "fixed box should be at viewport top"
+            );
+        }
+    }
+
+    #[test]
+    fn position_static_is_default() {
+        let tree = layout_html("<div>normal flow</div>");
+        // Should just work normally, no special positioning
+        assert!(tree.root.is_some());
     }
 }
