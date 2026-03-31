@@ -5,6 +5,7 @@
 
 pub mod block;
 pub mod box_generation;
+pub mod inline;
 pub mod text_measure;
 
 use ie_css::resolve::ResolvedStyle;
@@ -232,5 +233,79 @@ mod tests {
             has_anon,
             "should have anonymous block boxes for mixed content"
         );
+    }
+
+    #[test]
+    fn short_text_single_line() {
+        let tree = layout_html("<p>Hello</p>");
+        let text_box = tree
+            .boxes
+            .iter()
+            .find(|b| matches!(&b.box_type, BoxType::Text(_)));
+        assert!(text_box.is_some());
+        let tb = text_box.unwrap();
+        assert!(tb.content_rect.width > 0.0);
+        assert!(tb.content_rect.height > 0.0);
+    }
+
+    #[test]
+    fn long_text_wraps() {
+        // "word " repeated 100 times = 500 chars, each char 8px wide (16*0.5)
+        // Total unwrapped width = 4000px, viewport = 800px => must wrap
+        let long = "word ".repeat(100);
+        let html = format!("<p>{long}</p>");
+        let tree = layout_html(&html);
+        // The p element should have height > single line (16px)
+        let p_box = tree.boxes.iter().find(|b| {
+            b.node_id.is_some()
+                && matches!(b.box_type, BoxType::Block)
+                && b.content_rect.height > 16.0
+        });
+        assert!(
+            p_box.is_some(),
+            "long text should cause multi-line height in its block container"
+        );
+    }
+
+    #[test]
+    fn text_align_center() {
+        let tree = layout_html_with_css("<p>Hi</p>", "p { text-align: center; }");
+        let text = tree
+            .boxes
+            .iter()
+            .find(|b| matches!(&b.box_type, BoxType::Text(_)));
+        if let Some(tb) = text {
+            // "Hi" = 2 chars, width = 2 * 8 = 16px, centered in 800px => x ~ 392
+            assert!(
+                tb.content_rect.x > 100.0,
+                "centered text should have x > 100, got {}",
+                tb.content_rect.x
+            );
+        }
+    }
+
+    #[test]
+    fn multiple_inline_elements() {
+        let tree = layout_html("<p><span>A</span><span>B</span></p>");
+        // Both spans should exist
+        assert!(tree.boxes.len() >= 2);
+    }
+
+    #[test]
+    fn nowrap_prevents_wrapping() {
+        let long = "word ".repeat(100);
+        let html = format!("<p>{long}</p>");
+        let tree = layout_html_with_css(&html, "p { white-space: nowrap; }");
+        let text = tree
+            .boxes
+            .iter()
+            .find(|b| matches!(&b.box_type, BoxType::Text(_)));
+        if let Some(tb) = text {
+            assert!(
+                tb.content_rect.width > 800.0,
+                "nowrap text should exceed container, got {}",
+                tb.content_rect.width
+            );
+        }
     }
 }

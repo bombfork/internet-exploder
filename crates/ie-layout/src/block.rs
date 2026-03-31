@@ -3,6 +3,7 @@ use ie_css::resolve::ResolvedStyle;
 use ie_css::values::PropertyId;
 
 use crate::box_generation::{get_px, get_px_or, is_auto};
+use crate::inline::layout_inline_content;
 use crate::text_measure::TextMeasure;
 use crate::{BoxType, LayoutTree, Rect};
 
@@ -131,6 +132,41 @@ pub fn layout_block(
     // --- 2. Layout children ---
     let children = tree.boxes[box_idx].children.clone();
     let content_y = tree.boxes[box_idx].content_rect.y;
+
+    // If all children are inline/text, use the inline formatting context
+    let all_inline = !children.is_empty()
+        && children.iter().all(|&idx| {
+            matches!(
+                tree.boxes[idx].box_type,
+                BoxType::Inline | BoxType::InlineBlock | BoxType::Text(_)
+            )
+        });
+
+    if all_inline {
+        let inline_height = layout_inline_content(
+            box_idx,
+            tree,
+            styles,
+            content_width,
+            content_y,
+            text_measure,
+        );
+        let content_height = if let Some(style) = style {
+            if is_auto(style, PropertyId::Height) {
+                inline_height
+            } else {
+                let h = get_px(style, PropertyId::Height);
+                let min_h = get_px(style, PropertyId::MinHeight);
+                let max_h = get_px_or(style, PropertyId::MaxHeight, f32::MAX);
+                h.max(min_h).min(max_h)
+            }
+        } else {
+            inline_height
+        };
+        tree.boxes[box_idx].content_rect.height = content_height;
+        return;
+    }
+
     let mut child_y = content_y;
     let mut prev_margin_bottom: f32 = 0.0;
 
