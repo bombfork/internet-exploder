@@ -19,8 +19,10 @@ pub enum UserEvent {
 }
 
 pub struct Browser {
-    window: Option<Arc<Window>>,
+    // gpu_renderer MUST be before window — it holds a wgpu::Surface
+    // referencing the window, so it must drop first
     gpu_renderer: Option<ie_render::GpuRenderer>,
+    window: Option<Arc<Window>>,
     tab_manager: TabManager,
     bookmark_store: BookmarkStore,
     overlay: OverlayState,
