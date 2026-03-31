@@ -73,8 +73,23 @@ fn apply_landlock(profile: SandboxProfile) -> Result<bool> {
                 }
             }
             // Allow read on DNS/network config files
-            for path in ["/etc/resolv.conf", "/etc/nsswitch.conf", "/etc/hosts"] {
+            for path in [
+                "/etc/resolv.conf",
+                "/etc/nsswitch.conf",
+                "/etc/hosts",
+                "/etc/gai.conf",
+                "/etc/host.conf",
+                "/etc/ld.so.cache",
+            ] {
                 if let Ok(fd) = PathFd::new(path) {
+                    rs = rs.add_rule(PathBeneath::new(fd, AccessFs::from_read(abi)))?;
+                }
+            }
+            // Allow read on system libraries (glibc NSS modules for DNS resolution)
+            for path in ["/usr/lib", "/lib", "/lib64"] {
+                if std::path::Path::new(path).exists()
+                    && let Ok(fd) = PathFd::new(path)
+                {
                     rs = rs.add_rule(PathBeneath::new(fd, AccessFs::from_read(abi)))?;
                 }
             }
