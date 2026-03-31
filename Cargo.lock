@@ -1877,6 +1877,7 @@ dependencies = [
  "anyhow",
  "ie-css",
  "ie-dom",
+ "ie-html",
  "thiserror 2.0.18",
  "tracing",
 ]

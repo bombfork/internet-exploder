@@ -13,3 +13,6 @@ thiserror.workspace = true
 tracing.workspace = true
 ie-dom.workspace = true
 ie-css.workspace = true
+
+[dev-dependencies]
+ie-html.workspace = true
