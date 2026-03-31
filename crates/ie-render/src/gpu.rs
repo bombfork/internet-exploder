@@ -27,6 +27,7 @@ pub struct GpuRenderer {
     pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
+    text_renderer: crate::text::TextRenderer,
     size: (u32, u32),
 }
 
@@ -40,10 +41,9 @@ impl GpuRenderer {
                 compatible_surface: Some(&surface),
                 ..Default::default()
             })
-            .await
-            .ok_or_else(|| anyhow::anyhow!("no suitable GPU adapter"))?;
+            .await?;
         let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default(), None)
+            .request_device(&wgpu::DeviceDescriptor::default())
             .await?;
 
         let surface_caps = surface.get_capabilities(&adapter);
@@ -107,7 +107,7 @@ impl GpuRenderer {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("pipeline layout"),
             bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -150,9 +150,11 @@ impl GpuRenderer {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
+
+        let text_renderer = crate::text::TextRenderer::new(&device, &queue, surface_format);
 
         Ok(Self {
             surface,
@@ -162,6 +164,7 @@ impl GpuRenderer {
             pipeline,
             uniform_buffer,
             uniform_bind_group,
+            text_renderer,
             size: (size.width.max(1), size.height.max(1)),
         })
     }
@@ -189,38 +192,18 @@ impl GpuRenderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
+        // Build rect vertices (only FillRect commands)
         let mut vertices: Vec<Vertex> = Vec::new();
         for cmd in commands {
-            match cmd {
-                PaintCommand::FillRect {
-                    x,
-                    y,
-                    width,
-                    height,
-                    color,
-                } => {
-                    push_rect(&mut vertices, *x, *y, *width, *height, color);
-                }
-                PaintCommand::Text {
-                    text,
-                    x,
-                    y,
-                    font_size,
-                    color,
-                } => {
-                    // Placeholder: character rectangles (replaced by glyphon in #76)
-                    let char_w = font_size * 0.5;
-                    let char_h = font_size * 0.7;
-                    let glyph_y = y + (font_size - char_h) * 0.5;
-                    let mut cx = *x;
-                    for ch in text.chars() {
-                        if ch != ' ' {
-                            let glyph_w = char_w * 0.7;
-                            push_rect(&mut vertices, cx, glyph_y, glyph_w, char_h, color);
-                        }
-                        cx += char_w;
-                    }
-                }
+            if let PaintCommand::FillRect {
+                x,
+                y,
+                width,
+                height,
+                color,
+            } = cmd
+            {
+                push_rect(&mut vertices, *x, *y, *width, *height, color);
             }
         }
 
@@ -231,6 +214,11 @@ impl GpuRenderer {
                 contents: bytemuck::cast_slice(&vertices),
                 usage: wgpu::BufferUsages::VERTEX,
             });
+
+        // Prepare text rendering via glyphon
+        let (w, h) = self.size;
+        self.text_renderer
+            .prepare(&self.device, &self.queue, commands, w, h);
 
         let mut encoder = self
             .device
@@ -248,17 +236,22 @@ impl GpuRenderer {
                         load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
                         store: wgpu::StoreOp::Store,
                     },
+                    depth_slice: None,
                 })],
                 depth_stencil_attachment: None,
                 ..Default::default()
             });
 
+            // Draw rectangles (backgrounds, borders)
             if !vertices.is_empty() {
                 pass.set_pipeline(&self.pipeline);
                 pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                 pass.set_vertex_buffer(0, vertex_buffer.slice(..));
                 pass.draw(0..vertices.len() as u32, 0..1);
             }
+
+            // Draw text on top
+            self.text_renderer.render(&mut pass);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));

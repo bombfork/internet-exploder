@@ -38,7 +38,8 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1", features = ["full"] }
-wgpu = "24"
+wgpu = "28"
+glyphon = "0.10"
 winit = "0.30"
 boa_engine = "0.20"
 wasmtime = "31"

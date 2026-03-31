@@ -14,6 +14,7 @@ tracing.workspace = true
 wgpu.workspace = true
 winit.workspace = true
 bytemuck.workspace = true
+glyphon.workspace = true
 ie-layout.workspace = true
 ie-css.workspace = true
 
