@@ -1,7 +1,7 @@
 [package]
 name = "ie-render"
 version = "0.1.0"
-description = "GPU-accelerated renderer for Internet Exploder using wgpu"
+description = "Rendering engine for Internet Exploder — display list and software rasterizer"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -11,5 +11,8 @@ repository.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-wgpu.workspace = true
 ie-layout.workspace = true
+ie-css.workspace = true
+
+[dev-dependencies]
+ie-html.workspace = true

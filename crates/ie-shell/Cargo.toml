@@ -23,6 +23,10 @@ serde_json.workspace = true
 chrono.workspace = true
 ie-net.workspace = true
 ie-dom.workspace = true
+ie-html.workspace = true
+ie-css.workspace = true
+ie-layout.workspace = true
+ie-render.workspace = true
 ie-sandbox.workspace = true
 
 [dev-dependencies]

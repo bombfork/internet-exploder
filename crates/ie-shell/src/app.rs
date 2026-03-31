@@ -293,21 +293,71 @@ impl Browser {
     }
 
     fn paint(&mut self) {
-        if let Some(surface) = self.surface.as_mut() {
-            let size = self.window.as_ref().unwrap().inner_size();
-            let Some(width) = NonZeroU32::new(size.width) else {
-                return;
-            };
-            let Some(height) = NonZeroU32::new(size.height) else {
-                return;
-            };
-            surface
-                .resize(width, height)
-                .expect("failed to resize surface");
-            let mut buffer = surface.buffer_mut().expect("failed to get buffer");
-            buffer.fill(BG_COLOR);
-            buffer.present().expect("failed to present buffer");
+        let size = match self.window.as_ref() {
+            Some(w) => w.inner_size(),
+            None => return,
+        };
+        let Some(width) = NonZeroU32::new(size.width) else {
+            return;
+        };
+        let Some(height) = NonZeroU32::new(size.height) else {
+            return;
+        };
+
+        // Render page pixels before borrowing surface
+        let pixels = self.render_page(size.width, size.height);
+
+        let Some(surface) = self.surface.as_mut() else {
+            return;
+        };
+        surface
+            .resize(width, height)
+            .expect("failed to resize surface");
+        let mut buffer = surface.buffer_mut().expect("failed to get buffer");
+        buffer.copy_from_slice(&pixels);
+        buffer.present().expect("failed to present buffer");
+    }
+
+    fn render_page(&self, width: u32, height: u32) -> Vec<u32> {
+        let source = self
+            .tab_manager
+            .active_tab()
+            .and_then(|t| t.source.as_ref());
+        let Some(html) = source else {
+            return vec![BG_COLOR; (width * height) as usize];
+        };
+
+        let parse_result = ie_html::parse(html);
+        let ua = ie_css::ua_stylesheet();
+
+        let mut sheets = vec![(ua, ie_css::cascade::Origin::UserAgent)];
+        for style_css in &parse_result.style_elements {
+            let sheet = ie_css::parse_stylesheet(style_css);
+            sheets.push((sheet, ie_css::cascade::Origin::Author));
         }
+
+        let styles = ie_css::resolve::resolve_styles(
+            &parse_result.document,
+            &sheets,
+            &std::collections::HashMap::new(),
+            ie_css::resolve::ViewportSize {
+                width: width as f64,
+                height: height as f64,
+            },
+        );
+
+        let viewport = ie_layout::Rect {
+            x: 0.0,
+            y: 0.0,
+            width: width as f32,
+            height: height as f32,
+        };
+        let text_measure = ie_render::SoftwareTextMeasure;
+        let layout_tree =
+            ie_layout::layout(&parse_result.document, &styles, viewport, &text_measure);
+
+        let display_list = ie_render::build_display_list(&layout_tree, &styles);
+        ie_render::render_to_buffer(&display_list, width, height)
     }
 }
 
