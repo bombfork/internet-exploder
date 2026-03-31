@@ -53,6 +53,7 @@ serde_json = "1"
 clap = { version = "4", features = ["derive"] }
 softbuffer = "0.4"
 bytes = "1"
+bytemuck = { version = "1", features = ["derive"] }
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 tempfile = "3"

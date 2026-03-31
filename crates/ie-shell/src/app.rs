@@ -1,4 +1,3 @@
-use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -19,12 +18,9 @@ pub enum UserEvent {
     NavigationComplete(TabId, Result<NavigationResult, NavigationError>),
 }
 
-// Dark background color (#1a1a2e)
-const BG_COLOR: u32 = 0x001a1a2e;
-
 pub struct Browser {
     window: Option<Arc<Window>>,
-    surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
+    gpu_renderer: Option<ie_render::GpuRenderer>,
     tab_manager: TabManager,
     bookmark_store: BookmarkStore,
     overlay: OverlayState,
@@ -74,7 +70,7 @@ impl Browser {
 
         let mut browser = Self {
             window: None,
-            surface: None,
+            gpu_renderer: None,
             tab_manager: TabManager::new(),
             bookmark_store,
             overlay: OverlayState::None,
@@ -293,39 +289,28 @@ impl Browser {
     }
 
     fn paint(&mut self) {
-        let size = match self.window.as_ref() {
-            Some(w) => w.inner_size(),
-            None => return,
-        };
-        let Some(width) = NonZeroU32::new(size.width) else {
-            return;
-        };
-        let Some(height) = NonZeroU32::new(size.height) else {
-            return;
-        };
-
-        // Render page pixels before borrowing surface
-        let pixels = self.render_page(size.width, size.height);
-
-        let Some(surface) = self.surface.as_mut() else {
-            return;
-        };
-        surface
-            .resize(width, height)
-            .expect("failed to resize surface");
-        let mut buffer = surface.buffer_mut().expect("failed to get buffer");
-        buffer.copy_from_slice(&pixels);
-        buffer.present().expect("failed to present buffer");
+        let commands = self.render_page();
+        if let Some(renderer) = &mut self.gpu_renderer
+            && let Err(e) = renderer.render(&commands)
+        {
+            tracing::error!("render error: {e}");
+        }
     }
 
-    fn render_page(&self, width: u32, height: u32) -> Vec<u32> {
+    fn render_page(&self) -> Vec<ie_render::PaintCommand> {
         let source = self
             .tab_manager
             .active_tab()
             .and_then(|t| t.source.as_ref());
         let Some(html) = source else {
-            return vec![BG_COLOR; (width * height) as usize];
+            return vec![];
         };
+
+        let (width, height) = self
+            .gpu_renderer
+            .as_ref()
+            .map(|r| r.size())
+            .unwrap_or((800, 600));
 
         let parse_result = ie_html::parse(html);
         let ua = ie_css::ua_stylesheet();
@@ -356,8 +341,7 @@ impl Browser {
         let layout_tree =
             ie_layout::layout(&parse_result.document, &styles, viewport, &text_measure);
 
-        let display_list = ie_render::build_display_list(&layout_tree, &styles);
-        ie_render::render_to_buffer(&display_list, width, height)
+        ie_render::build_display_list(&layout_tree, &styles)
     }
 }
 
@@ -386,12 +370,18 @@ impl ApplicationHandler<UserEvent> for Browser {
             match event_loop.create_window(attrs) {
                 Ok(window) => {
                     let window = Arc::new(window);
-                    let context = softbuffer::Context::new(window.clone())
-                        .expect("failed to create softbuffer context");
-                    let surface = softbuffer::Surface::new(&context, window.clone())
-                        .expect("failed to create softbuffer surface");
+                    match self
+                        .tokio_runtime
+                        .block_on(ie_render::GpuRenderer::new(window.clone()))
+                    {
+                        Ok(renderer) => {
+                            self.gpu_renderer = Some(renderer);
+                        }
+                        Err(e) => {
+                            tracing::error!("failed to create GPU renderer: {e}");
+                        }
+                    }
                     self.window = Some(window);
-                    self.surface = Some(surface);
                     self.window.as_ref().unwrap().request_redraw();
                 }
                 Err(e) => {
@@ -472,7 +462,10 @@ impl ApplicationHandler<UserEvent> for Browser {
             WindowEvent::RedrawRequested => {
                 self.paint();
             }
-            WindowEvent::Resized(_) => {
+            WindowEvent::Resized(size) => {
+                if let Some(renderer) = &mut self.gpu_renderer {
+                    renderer.resize(size.width, size.height);
+                }
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
