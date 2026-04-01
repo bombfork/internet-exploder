@@ -171,6 +171,10 @@ impl Browser {
                 event_loop.exit();
             }
         }
+        // Redraw after any action to update chrome overlays
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
     }
 
     fn handle_address_bar_input(&mut self, event: &winit::event::KeyEvent) {
@@ -291,11 +295,79 @@ impl Browser {
     }
 
     fn paint(&mut self) {
-        let commands = self.render_page();
+        let mut commands = self.render_page();
+
+        // Append chrome overlay commands on top of page content
+        let (vw, vh) = self
+            .gpu_renderer
+            .as_ref()
+            .map(|r| r.size())
+            .unwrap_or((800, 600));
+        let chrome = self.build_chrome_overlay();
+        commands.extend(ie_render::build_chrome_display_list(
+            &chrome, vw as f32, vh as f32,
+        ));
+
         if let Some(renderer) = &mut self.gpu_renderer
             && let Err(e) = renderer.render(&commands)
         {
             tracing::error!("render error: {e}");
+        }
+    }
+
+    fn build_chrome_overlay(&self) -> ie_render::ChromeOverlay {
+        match &self.overlay {
+            OverlayState::None => ie_render::ChromeOverlay::none(),
+            OverlayState::AddressBar(bar) => ie_render::ChromeOverlay {
+                address_bar: Some(ie_render::AddressBarOverlay {
+                    text: bar.input.clone(),
+                    cursor: bar.cursor,
+                }),
+                tab_list: None,
+                bookmarks: None,
+            },
+            OverlayState::TabList => {
+                let tabs = self
+                    .tab_manager
+                    .tabs()
+                    .iter()
+                    .map(|t| ie_render::TabEntry {
+                        id: t.id.0,
+                        title: t.title.clone(),
+                        url: t
+                            .url
+                            .as_ref()
+                            .map(|u| u.as_str().to_string())
+                            .unwrap_or_default(),
+                    })
+                    .collect();
+                let active_index = self
+                    .tab_manager
+                    .active_tab()
+                    .and_then(|at| self.tab_manager.tabs().iter().position(|t| t.id == at.id))
+                    .unwrap_or(0);
+                ie_render::ChromeOverlay {
+                    address_bar: None,
+                    tab_list: Some(ie_render::TabListOverlay { tabs, active_index }),
+                    bookmarks: None,
+                }
+            }
+            OverlayState::Bookmarks => {
+                let bookmarks = self
+                    .bookmark_store
+                    .list()
+                    .iter()
+                    .map(|b| ie_render::BookmarkEntry {
+                        title: b.title.clone(),
+                        url: b.url.clone(),
+                    })
+                    .collect();
+                ie_render::ChromeOverlay {
+                    address_bar: None,
+                    tab_list: None,
+                    bookmarks: Some(ie_render::BookmarkListOverlay { bookmarks }),
+                }
+            }
         }
     }
 
@@ -447,6 +519,9 @@ impl ApplicationHandler<UserEvent> for Browser {
                             return;
                         }
                         self.handle_address_bar_input(key_event);
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
                     } else {
                         // TabList / Bookmarks: Escape dismisses, other keys go through
                         if let Some(action) =
