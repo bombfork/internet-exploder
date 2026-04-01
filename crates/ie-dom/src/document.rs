@@ -7,7 +7,7 @@ use crate::error::DomError;
 use crate::node::{Node, NodeKind};
 use crate::traversal::{AncestorsIter, DescendantsIter};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
     pub nodes: Vec<Node>,
     pub root: NodeId,

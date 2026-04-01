@@ -453,6 +453,23 @@ impl Browser {
             .unwrap_or((800, 600));
 
         let parse_result = ie_html::parse(html);
+
+        // Execute <script> elements — JS can modify the DOM
+        let doc = std::rc::Rc::new(std::cell::RefCell::new(parse_result.document));
+        if !parse_result.script_elements.is_empty()
+            && let Ok(mut js_rt) = ie_js::JsRuntime::new_with_document(doc.clone())
+        {
+            for script in &parse_result.script_elements {
+                if let Err(e) = js_rt.execute(script) {
+                    tracing::warn!("script error: {e}");
+                }
+            }
+        }
+        let document = match std::rc::Rc::try_unwrap(doc) {
+            Ok(cell) => cell.into_inner(),
+            Err(rc) => rc.borrow().clone(),
+        };
+
         let ua = ie_css::ua_stylesheet();
 
         let mut sheets = vec![(ua, ie_css::cascade::Origin::UserAgent)];
@@ -462,7 +479,7 @@ impl Browser {
         }
 
         let styles = ie_css::resolve::resolve_styles(
-            &parse_result.document,
+            &document,
             &sheets,
             &std::collections::HashMap::new(),
             ie_css::resolve::ViewportSize {
@@ -478,8 +495,7 @@ impl Browser {
             height: height as f32,
         };
         let text_measure = ie_render::SoftwareTextMeasure;
-        let layout_tree =
-            ie_layout::layout(&parse_result.document, &styles, viewport, &text_measure);
+        let layout_tree = ie_layout::layout(&document, &styles, viewport, &text_measure);
 
         ie_render::build_display_list(&layout_tree, &styles)
     }

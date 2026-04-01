@@ -11,6 +11,7 @@ pub struct ParseResult {
     pub errors: Vec<String>,
     pub style_elements: Vec<String>,
     pub link_stylesheets: Vec<String>,
+    pub script_elements: Vec<String>,
 }
 
 /// Top-level parse function. HTML parsing never fails — errors are collected.
@@ -22,6 +23,7 @@ pub fn parse(html: &str) -> ParseResult {
         errors: tb.errors,
         style_elements: tb.style_elements,
         link_stylesheets: tb.link_stylesheets,
+        script_elements: tb.script_elements,
     }
 }
 
@@ -40,6 +42,7 @@ struct TreeBuilder<'a> {
     errors: Vec<String>,
     style_elements: Vec<String>,
     link_stylesheets: Vec<String>,
+    script_elements: Vec<String>,
     pending_text: String,
     reprocess_depth: u32,
     done: bool,
@@ -62,6 +65,7 @@ impl<'a> TreeBuilder<'a> {
             errors: Vec::new(),
             style_elements: Vec::new(),
             link_stylesheets: Vec::new(),
+            script_elements: Vec::new(),
             pending_text: String::new(),
             reprocess_depth: 0,
             done: false,
@@ -1541,7 +1545,10 @@ impl<'a> TreeBuilder<'a> {
                 self.process_token(token);
             }
             Token::EndTag { ref name } if name == "script" => {
-                self.pending_text.clear();
+                let script_content = std::mem::take(&mut self.pending_text);
+                if !script_content.trim().is_empty() {
+                    self.script_elements.push(script_content);
+                }
                 self.open_elements.pop();
                 self.mode = self.original_mode.take().unwrap_or(InsertionMode::InBody);
             }

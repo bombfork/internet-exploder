@@ -26,6 +26,7 @@ ie-html.workspace = true
 ie-css.workspace = true
 ie-layout.workspace = true
 ie-render.workspace = true
+ie-js.workspace = true
 ie-sandbox.workspace = true
 
 [dev-dependencies]

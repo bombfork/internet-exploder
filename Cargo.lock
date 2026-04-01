@@ -2019,6 +2019,7 @@ dependencies = [
  "ie-css",
  "ie-dom",
  "ie-html",
+ "ie-js",
  "ie-layout",
  "ie-net",
  "ie-render",
