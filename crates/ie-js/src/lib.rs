@@ -4,19 +4,42 @@
 //! Provides DOM bindings and Web API surface.
 
 mod console;
+pub mod dom_bindings;
+
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use anyhow::Result;
 use boa_engine::{Context, Source};
+use ie_dom::Document;
+
+use crate::dom_bindings::SharedDoc;
 
 pub struct JsRuntime {
     context: Context,
+    #[allow(dead_code)]
+    document: Option<SharedDoc>,
 }
 
 impl JsRuntime {
     pub fn new() -> Result<Self> {
         let mut context = Context::default();
         console::register_console(&mut context);
-        Ok(Self { context })
+        Ok(Self {
+            context,
+            document: None,
+        })
+    }
+
+    /// Create a runtime with a shared `Document`, registering the `document` global.
+    pub fn new_with_document(doc: Rc<RefCell<Document>>) -> Result<Self> {
+        let mut context = Context::default();
+        console::register_console(&mut context);
+        dom_bindings::register_document(&mut context, doc.clone());
+        Ok(Self {
+            context,
+            document: Some(doc),
+        })
     }
 
     /// Execute a JavaScript source string. Returns Ok on success, Err on JS error.
