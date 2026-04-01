@@ -36,7 +36,8 @@ fn generate_boxes(
             }
 
             let box_type = match display {
-                "block" | "list-item" | "table" | "flex" => BoxType::Block,
+                "flex" => BoxType::Flex,
+                "block" | "list-item" | "table" => BoxType::Block,
                 "inline" => BoxType::Inline,
                 "inline-block" => BoxType::InlineBlock,
                 _ => BoxType::Block,
@@ -67,17 +68,17 @@ fn generate_boxes(
             // Insert anonymous block boxes when mixing block+inline children
             let has_block = child_indices
                 .iter()
-                .any(|&i| matches!(tree.boxes[i].box_type, BoxType::Block));
+                .any(|&i| matches!(tree.boxes[i].box_type, BoxType::Block | BoxType::Flex));
             let has_inline = child_indices
                 .iter()
-                .any(|&i| !matches!(tree.boxes[i].box_type, BoxType::Block));
+                .any(|&i| !matches!(tree.boxes[i].box_type, BoxType::Block | BoxType::Flex));
 
             if has_block && has_inline && matches!(box_type, BoxType::Block) {
                 let mut wrapped = Vec::new();
                 let mut inline_run = Vec::new();
 
                 for &idx in &child_indices {
-                    if matches!(tree.boxes[idx].box_type, BoxType::Block) {
+                    if matches!(tree.boxes[idx].box_type, BoxType::Block | BoxType::Flex) {
                         if !inline_run.is_empty() {
                             let anon = LayoutBox {
                                 node_id: None,

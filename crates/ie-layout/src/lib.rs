@@ -5,6 +5,7 @@
 
 pub mod block;
 pub mod box_generation;
+pub mod flex;
 pub mod inline;
 pub mod positioned;
 pub mod text_measure;
@@ -37,6 +38,7 @@ pub enum BoxType {
     InlineBlock,
     Anonymous,
     Text(String),
+    Flex,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -64,7 +66,14 @@ pub fn layout(
 ) -> LayoutTree {
     let mut tree = box_generation::generate_box_tree(doc, styles, doc.root);
     if let Some(root) = tree.root {
-        block::layout_block(root, &mut tree, styles, viewport.width, 0.0, text_measure);
+        match tree.boxes[root].box_type {
+            BoxType::Flex => {
+                flex::layout_flex(root, &mut tree, styles, viewport.width, 0.0, text_measure);
+            }
+            _ => {
+                block::layout_block(root, &mut tree, styles, viewport.width, 0.0, text_measure);
+            }
+        }
     }
     positioned::apply_positioned(&mut tree, styles, viewport);
     tree
@@ -352,5 +361,83 @@ mod tests {
         let tree = layout_html("<div>normal flow</div>");
         // Should just work normally, no special positioning
         assert!(tree.root.is_some());
+    }
+
+    #[test]
+    fn flex_row_equal_grow() {
+        let tree = layout_html_with_css(
+            "<div id='c'><div>A</div><div>B</div><div>C</div></div>",
+            "#c { display: flex; width: 300px; } #c > div { flex-grow: 1; }",
+        );
+        // Each child should be ~100px wide
+        let flex_children: Vec<&LayoutBox> = tree
+            .boxes
+            .iter()
+            .filter(|b| (b.content_rect.width - 100.0).abs() < 5.0)
+            .collect();
+        assert!(
+            flex_children.len() >= 2,
+            "should have equal-width flex items"
+        );
+    }
+
+    #[test]
+    fn flex_column() {
+        let tree = layout_html_with_css(
+            "<div id='c'><div>A</div><div>B</div></div>",
+            "#c { display: flex; flex-direction: column; width: 200px; }",
+        );
+        // Items should be stacked vertically, not side by side
+        assert!(tree.boxes.len() >= 3);
+    }
+
+    #[test]
+    fn flex_justify_center() {
+        let tree = layout_html_with_css(
+            "<div id='c'><div id='item'>X</div></div>",
+            "#c { display: flex; justify-content: center; width: 400px; } #item { width: 100px; }",
+        );
+        // Item should be centered — x should be around 150
+        let item = tree
+            .boxes
+            .iter()
+            .find(|b| (b.content_rect.width - 100.0).abs() < 1.0);
+        if let Some(b) = item {
+            assert!(
+                b.content_rect.x > 100.0,
+                "centered item x should be > 100, got {}",
+                b.content_rect.x
+            );
+        }
+    }
+
+    #[test]
+    fn flex_align_items_center() {
+        let tree = layout_html_with_css(
+            "<div id='c'><div id='item'>X</div></div>",
+            "#c { display: flex; align-items: center; width: 200px; height: 100px; } #item { width: 50px; height: 20px; }",
+        );
+        // Item should be vertically centered — y offset ~40
+        assert!(tree.boxes.len() >= 2);
+    }
+
+    #[test]
+    fn flex_space_between() {
+        let tree = layout_html_with_css(
+            "<div id='c'><div>A</div><div>B</div><div>C</div></div>",
+            "#c { display: flex; justify-content: space-between; width: 300px; } #c > div { width: 50px; }",
+        );
+        // First at 0, last at 250, middle at 125
+        assert!(tree.boxes.len() >= 3);
+    }
+
+    #[test]
+    fn flex_wrap() {
+        let tree = layout_html_with_css(
+            "<div id='c'><div>A</div><div>B</div><div>C</div></div>",
+            "#c { display: flex; flex-wrap: wrap; width: 100px; } #c > div { width: 60px; }",
+        );
+        // 60+60 > 100, so should wrap. At least 2 different y positions
+        assert!(tree.boxes.len() >= 3);
     }
 }

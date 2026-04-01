@@ -208,6 +208,16 @@ pub fn layout_block(
                     height: metrics.height,
                 };
             }
+            BoxType::Flex => {
+                crate::flex::layout_flex(
+                    child_idx,
+                    tree,
+                    styles,
+                    content_width,
+                    child_y,
+                    text_measure,
+                );
+            }
             BoxType::Inline | BoxType::InlineBlock => {
                 // Simplified: treat as block for now
                 layout_block(
