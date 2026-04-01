@@ -161,6 +161,14 @@ impl Browser {
                 self.overlay = OverlayState::StatusBar;
                 tracing::info!("overlay: StatusBar");
             }
+            Action::Reload => {
+                if let Some(tab) = self.tab_manager.active_tab()
+                    && let Some(url) = tab.url.clone()
+                {
+                    tracing::info!("reload: tab={}, url={}", tab.id.0, url);
+                    self.start_navigation(url);
+                }
+            }
             Action::GoBack => {
                 if self.tab_manager.go_back()
                     && let Some(tab) = self.tab_manager.active_tab()

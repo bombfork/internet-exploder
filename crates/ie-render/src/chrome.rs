@@ -294,6 +294,7 @@ const HELP_SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Shift+T", "Tab list"),
     ("Ctrl+D", "Bookmark page"),
     ("Ctrl+Shift+B", "Bookmarks"),
+    ("F5 / Ctrl+Shift+R", "Reload page"),
     ("Alt+Left", "Go back"),
     ("Alt+Right", "Go forward"),
     ("Ctrl+H / F1", "This help"),

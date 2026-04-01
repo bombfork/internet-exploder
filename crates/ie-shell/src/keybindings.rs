@@ -13,6 +13,7 @@ pub enum Action {
     ShowBookmarks,
     ShowHelp,
     ShowStatusBar,
+    Reload,
     GoBack,
     GoForward,
     DismissOverlay,
@@ -34,6 +35,7 @@ fn resolve_key(key: &Key, modifiers: &ModifiersState) -> Option<Action> {
     match key {
         Key::Named(NamedKey::Escape) => Some(Action::DismissOverlay),
         Key::Named(NamedKey::F1) => Some(Action::ShowHelp),
+        Key::Named(NamedKey::F5) => Some(Action::Reload),
         Key::Named(NamedKey::F12) => Some(Action::ShowStatusBar),
         Key::Named(NamedKey::Tab) if ctrl && shift => Some(Action::PrevTab),
         Key::Named(NamedKey::Tab) if ctrl => Some(Action::NextTab),
@@ -41,6 +43,8 @@ fn resolve_key(key: &Key, modifiers: &ModifiersState) -> Option<Action> {
         Key::Named(NamedKey::ArrowRight) if alt => Some(Action::GoForward),
         Key::Character(c) if ctrl => match c.as_str() {
             "h" | "H" => Some(Action::ShowHelp),
+            "R" => Some(Action::Reload),
+            "r" if shift => Some(Action::Reload),
             "l" | "L" => Some(Action::ShowAddressBar),
             "T" => Some(Action::ShowTabList),
             "t" if shift => Some(Action::ShowTabList),
