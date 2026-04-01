@@ -5,6 +5,7 @@
 
 mod console;
 pub mod dom_bindings;
+mod events;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -25,6 +26,7 @@ impl JsRuntime {
     pub fn new() -> Result<Self> {
         let mut context = Context::default();
         console::register_console(&mut context);
+        events::register_timers(&mut context);
         Ok(Self {
             context,
             document: None,
@@ -35,6 +37,7 @@ impl JsRuntime {
     pub fn new_with_document(doc: Rc<RefCell<Document>>) -> Result<Self> {
         let mut context = Context::default();
         console::register_console(&mut context);
+        events::register_timers(&mut context);
         dom_bindings::register_document(&mut context, doc.clone());
         Ok(Self {
             context,
@@ -129,6 +132,41 @@ mod tests {
         let mut rt = JsRuntime::new().unwrap();
         let result = rt.eval("'hello' + ' ' + 'world'").unwrap();
         assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn set_timeout_fires() {
+        let mut rt = JsRuntime::new().unwrap();
+        rt.execute("var fired = false; setTimeout(function() { fired = true; }, 0)")
+            .unwrap();
+        let result = rt.eval("fired").unwrap();
+        assert_eq!(result, "true");
+    }
+
+    #[test]
+    fn set_timeout_returns_id() {
+        let mut rt = JsRuntime::new().unwrap();
+        let result = rt.eval("typeof setTimeout(function(){}, 100)").unwrap();
+        assert_eq!(result, "number");
+    }
+
+    #[test]
+    fn clear_timeout_no_crash() {
+        let mut rt = JsRuntime::new().unwrap();
+        rt.execute("clearTimeout(1)").unwrap();
+    }
+
+    #[test]
+    fn set_interval_returns_id() {
+        let mut rt = JsRuntime::new().unwrap();
+        let result = rt.eval("typeof setInterval(function(){}, 100)").unwrap();
+        assert_eq!(result, "number");
+    }
+
+    #[test]
+    fn clear_interval_no_crash() {
+        let mut rt = JsRuntime::new().unwrap();
+        rt.execute("clearInterval(1)").unwrap();
     }
 
     #[test]

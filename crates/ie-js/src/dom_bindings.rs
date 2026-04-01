@@ -200,6 +200,57 @@ fn make_element_object(context: &mut Context, node_id: NodeId, doc: &SharedDoc) 
         })
     };
 
+    // addEventListener(type, handler) — stores one handler per event type
+    let add_event_listener = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let event_type = args
+            .get_or_undefined(0)
+            .to_string(ctx)?
+            .to_std_string_escaped();
+        let handler = args.get(1).cloned().unwrap_or(JsValue::undefined());
+        if let Some(obj) = this.as_object() {
+            let key = js_string!(format!("__listeners_{event_type}"));
+            let _ = obj.set(key, handler, false, ctx);
+        }
+        Ok(JsValue::undefined())
+    });
+
+    // removeEventListener(type) — removes stored handler
+    let remove_event_listener = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let event_type = args
+            .get_or_undefined(0)
+            .to_string(ctx)?
+            .to_std_string_escaped();
+        if let Some(obj) = this.as_object() {
+            let key = js_string!(format!("__listeners_{event_type}"));
+            let _ = obj.set(key, JsValue::undefined(), false, ctx);
+        }
+        Ok(JsValue::undefined())
+    });
+
+    // dispatchEvent(type) — invokes the stored handler with a simple event object
+    let dispatch_event = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let event_type = args
+            .get_or_undefined(0)
+            .to_string(ctx)?
+            .to_std_string_escaped();
+        if let Some(obj) = this.as_object() {
+            let key = js_string!(format!("__listeners_{event_type}"));
+            if let Ok(handler) = obj.get(key, ctx)
+                && let Some(callable) = handler.as_callable()
+            {
+                let event_obj = ObjectInitializer::new(ctx)
+                    .property(
+                        js_string!("type"),
+                        JsValue::from(js_string!(event_type)),
+                        Attribute::all(),
+                    )
+                    .build();
+                let _ = callable.call(&JsValue::from(obj.clone()), &[event_obj.into()], ctx);
+            }
+        }
+        Ok(JsValue::undefined())
+    });
+
     let obj = ObjectInitializer::new(context)
         .property(
             js_string!("__nodeId"),
@@ -213,6 +264,9 @@ fn make_element_object(context: &mut Context, node_id: NodeId, doc: &SharedDoc) 
         .function(get_attribute, js_string!("getAttribute"), 1)
         .function(set_attribute, js_string!("setAttribute"), 2)
         .function(tag_name, js_string!("getTagName"), 0)
+        .function(add_event_listener, js_string!("addEventListener"), 2)
+        .function(remove_event_listener, js_string!("removeEventListener"), 2)
+        .function(dispatch_event, js_string!("dispatchEvent"), 1)
         .build();
 
     obj.into()
@@ -411,6 +465,65 @@ mod tests {
             .eval("document.getElementsByTagName('div').length")
             .unwrap();
         assert_eq!(result, "2");
+    }
+
+    #[test]
+    fn add_event_listener_and_dispatch() {
+        let doc = Rc::new(RefCell::new(Document::new()));
+        let mut rt = make_runtime_with_doc(doc);
+        rt.execute(
+            "var el = document.createElement('div'); \
+             var called = false; \
+             el.addEventListener('click', function(e) { called = true; }); \
+             el.dispatchEvent('click')",
+        )
+        .unwrap();
+        let result = rt.eval("called").unwrap();
+        assert_eq!(result, "true");
+    }
+
+    #[test]
+    fn dispatch_event_passes_event_object() {
+        let doc = Rc::new(RefCell::new(Document::new()));
+        let mut rt = make_runtime_with_doc(doc);
+        rt.execute(
+            "var el = document.createElement('div'); \
+             var eventType = ''; \
+             el.addEventListener('click', function(e) { eventType = e.type; }); \
+             el.dispatchEvent('click')",
+        )
+        .unwrap();
+        let result = rt.eval("eventType").unwrap();
+        assert_eq!(result, "click");
+    }
+
+    #[test]
+    fn remove_event_listener() {
+        let doc = Rc::new(RefCell::new(Document::new()));
+        let mut rt = make_runtime_with_doc(doc);
+        rt.execute(
+            "var el = document.createElement('div'); \
+             var count = 0; \
+             el.addEventListener('click', function() { count++; }); \
+             el.dispatchEvent('click'); \
+             el.removeEventListener('click'); \
+             el.dispatchEvent('click')",
+        )
+        .unwrap();
+        let result = rt.eval("count").unwrap();
+        assert_eq!(result, "1");
+    }
+
+    #[test]
+    fn dispatch_event_without_listener() {
+        let doc = Rc::new(RefCell::new(Document::new()));
+        let mut rt = make_runtime_with_doc(doc);
+        // Should not crash
+        rt.execute(
+            "var el = document.createElement('div'); \
+             el.dispatchEvent('click')",
+        )
+        .unwrap();
     }
 
     #[test]
