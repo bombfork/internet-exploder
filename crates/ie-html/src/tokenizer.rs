@@ -1949,7 +1949,7 @@ impl<'a> Iterator for Tokenizer<'a> {
             }
             self.step();
             steps += 1;
-            if steps > 200 {
+            if steps > 10_000 {
                 tracing::error!("tokenizer infinite loop detected, emitting EOF");
                 self.finished = true;
                 return Some(Token::Eof);

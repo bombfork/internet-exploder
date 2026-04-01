@@ -15,7 +15,7 @@ use crate::overlay::{AddressBarState, OverlayState};
 use crate::tab::{TabId, TabManager, TabState};
 
 pub enum UserEvent {
-    NavigationComplete(TabId, Result<NavigationResult, NavigationError>),
+    NavigationComplete(TabId, Result<NavigationResult, NavigationError>, u64),
 }
 
 pub struct Browser {
@@ -31,6 +31,8 @@ pub struct Browser {
     _network_child: Option<ie_sandbox::ChildHandle>,
     modifiers: ModifiersState,
     event_loop_proxy: EventLoopProxy<UserEvent>,
+    status_log: Vec<String>,
+    last_load_time_ms: Option<u64>,
 }
 
 impl Browser {
@@ -81,6 +83,8 @@ impl Browser {
             _network_child: network_child,
             modifiers: ModifiersState::empty(),
             event_loop_proxy: proxy,
+            status_log: Vec::new(),
+            last_load_time_ms: None,
         };
 
         if let Some(url) = url {
@@ -148,6 +152,14 @@ impl Browser {
             Action::ShowBookmarks => {
                 self.overlay = OverlayState::Bookmarks;
                 tracing::info!("overlay: Bookmarks");
+            }
+            Action::ShowHelp => {
+                self.overlay = OverlayState::Help;
+                tracing::info!("overlay: Help");
+            }
+            Action::ShowStatusBar => {
+                self.overlay = OverlayState::StatusBar;
+                tracing::info!("overlay: StatusBar");
             }
             Action::GoBack => {
                 if self.tab_manager.go_back()
@@ -239,11 +251,16 @@ impl Browser {
 
         tracing::info!("navigate: tab={}, url={}", tab_id.0, url);
 
+        self.status_log
+            .push(format!("navigating: tab={}, url={}", tab_id.0, url));
+
         let proxy = self.event_loop_proxy.clone();
         let navigator = Arc::clone(&self.navigator);
         self.tokio_runtime.spawn(async move {
+            let start = std::time::Instant::now();
             let result = navigator.navigate(&url).await;
-            let _ = proxy.send_event(UserEvent::NavigationComplete(tab_id, result));
+            let elapsed = start.elapsed().as_millis() as u64;
+            let _ = proxy.send_event(UserEvent::NavigationComplete(tab_id, result, elapsed));
         });
     }
 
@@ -254,11 +271,12 @@ impl Browser {
     ) {
         match result {
             Ok(nav_result) => {
-                tracing::info!(
+                let msg = format!(
                     "navigation complete: tab={}, status={}",
-                    tab_id.0,
-                    nav_result.status
+                    tab_id.0, nav_result.status
                 );
+                tracing::info!("{msg}");
+                self.status_log.push(msg);
                 let source = String::from_utf8(nav_result.body).ok();
                 // Find the tab (it might have been closed while loading)
                 if let Some(tab) = self
@@ -278,7 +296,9 @@ impl Browser {
                 }
             }
             Err(e) => {
-                tracing::error!("navigation error: tab={}, error={}", tab_id.0, e);
+                let msg = format!("navigation error: tab={}, error={}", tab_id.0, e);
+                tracing::error!("{msg}");
+                self.status_log.push(msg);
                 if let Some(tab) = self
                     .tab_manager
                     .tabs_mut()
@@ -325,6 +345,8 @@ impl Browser {
                 }),
                 tab_list: None,
                 bookmarks: None,
+                help: false,
+                status_bar: None,
             },
             OverlayState::TabList => {
                 let tabs = self
@@ -350,6 +372,8 @@ impl Browser {
                     address_bar: None,
                     tab_list: Some(ie_render::TabListOverlay { tabs, active_index }),
                     bookmarks: None,
+                    help: false,
+                    status_bar: None,
                 }
             }
             OverlayState::Bookmarks => {
@@ -366,6 +390,40 @@ impl Browser {
                     address_bar: None,
                     tab_list: None,
                     bookmarks: Some(ie_render::BookmarkListOverlay { bookmarks }),
+                    help: false,
+                    status_bar: None,
+                }
+            }
+            OverlayState::Help => ie_render::ChromeOverlay {
+                address_bar: None,
+                tab_list: None,
+                bookmarks: None,
+                help: true,
+                status_bar: None,
+            },
+            OverlayState::StatusBar => {
+                let url = self
+                    .tab_manager
+                    .active_tab()
+                    .and_then(|t| t.url.as_ref())
+                    .map(|u| u.as_str().to_string())
+                    .unwrap_or_default();
+                let status = self
+                    .tab_manager
+                    .active_tab()
+                    .map(|t| format!("{:?}", t.state))
+                    .unwrap_or_else(|| "No tab".to_string());
+                ie_render::ChromeOverlay {
+                    address_bar: None,
+                    tab_list: None,
+                    bookmarks: None,
+                    help: false,
+                    status_bar: Some(ie_render::StatusBarOverlay {
+                        url,
+                        status,
+                        load_time_ms: self.last_load_time_ms,
+                        log_entries: self.status_log.clone(),
+                    }),
                 }
             }
         }
@@ -468,7 +526,8 @@ impl ApplicationHandler<UserEvent> for Browser {
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
-            UserEvent::NavigationComplete(tab_id, result) => {
+            UserEvent::NavigationComplete(tab_id, result, elapsed_ms) => {
+                self.last_load_time_ms = Some(elapsed_ms);
                 self.handle_navigation_complete(tab_id, result);
             }
         }

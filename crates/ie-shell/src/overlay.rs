@@ -4,6 +4,8 @@ pub enum OverlayState {
     AddressBar(AddressBarState),
     TabList,
     Bookmarks,
+    Help,
+    StatusBar,
 }
 
 impl OverlayState {

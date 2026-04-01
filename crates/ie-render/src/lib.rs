@@ -10,8 +10,8 @@ pub mod software;
 pub mod text;
 
 pub use chrome::{
-    AddressBarOverlay, BookmarkEntry, BookmarkListOverlay, ChromeOverlay, TabEntry, TabListOverlay,
-    build_chrome_display_list,
+    AddressBarOverlay, BookmarkEntry, BookmarkListOverlay, ChromeOverlay, StatusBarOverlay,
+    TabEntry, TabListOverlay, build_chrome_display_list,
 };
 pub use gpu::GpuRenderer;
 pub use paint::{Color, PaintCommand, build_display_list};
