@@ -28,6 +28,7 @@ pub async fn run_network_process(mut channel: IpcChannel) -> Result<()> {
                             .await?;
                     }
                     Err(e) => {
+                        tracing::error!("fetch failed: {e:?}");
                         channel
                             .send(&IpcMessage::FetchError {
                                 id,

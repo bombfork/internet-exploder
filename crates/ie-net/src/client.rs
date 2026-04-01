@@ -24,8 +24,10 @@ pub struct Client {
 
 impl Client {
     pub fn new() -> Result<Self, NetError> {
+        // Use native OS certificates with webpki-roots as fallback
         let connector = HttpsConnectorBuilder::new()
-            .with_webpki_roots()
+            .with_native_roots()
+            .map_err(|e| NetError::TlsError(format!("failed to load native certs: {e}")))?
             .https_or_http()
             .enable_http1()
             .enable_http2()
@@ -88,7 +90,14 @@ impl Client {
                 .map_err(|e| NetError::ConnectionFailed(e.to_string()))?;
 
             let resp = self.inner.request(req).await.map_err(|e| {
-                let msg = e.to_string();
+                // Capture full error chain for debugging
+                use std::error::Error as _;
+                let mut msg = e.to_string();
+                let mut source: Option<&dyn std::error::Error> = e.source();
+                while let Some(inner) = source {
+                    msg.push_str(&format!(" → {inner}"));
+                    source = inner.source();
+                }
                 if msg.contains("tls") || msg.contains("ssl") || msg.contains("certificate") {
                     NetError::TlsError(msg)
                 } else {
